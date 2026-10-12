@@ -75,10 +75,8 @@ LOGIN_WINDOW_SECONDS = 300  # 5 минут
 #   GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH (по умолчанию 'main')
 # В репозитории должен лежать файл update-manifest.json вида:
 #   { "version": "1.0.3", "files": ["app.js","index.html","style.css","server.py","database.py","app.py","login.html"] }
-GITHUB_OWNER = Solowawe
-GITHUB_OWNER =boxingupd
-UPDATE_OWNER = os.environ.get('GITHUB_OWNER', '').strip()
-UPDATE_REPO = os.environ.get('GITHUB_REPO', '').strip()
+UPDATE_OWNER = 'Solowawer'  
+UPDATE_REPO = 'boxingupd'
 UPDATE_BRANCH = os.environ.get('GITHUB_BRANCH', 'main').strip() or 'main'
 UPDATE_MANIFEST = 'update-manifest.json'
 LOCAL_VERSION_FILE = 'local_version.txt'
