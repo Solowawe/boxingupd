@@ -1,0 +1,1358 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* Toast-уведомления */
+#toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 360px;
+}
+
+.toast {
+    background: rgba(30, 30, 50, 0.96);
+    border: 1px solid rgba(255, 215, 0, 0.35);
+    border-left: 4px solid #ffd700;
+    color: #e0e0e0;
+    padding: 12px 16px;
+    border-radius: 8px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+    font-size: 0.95em;
+    opacity: 0;
+    transform: translateX(20px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+    white-space: pre-line;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.toast.success {
+    border-left-color: #2ecc71;
+}
+
+.toast.error {
+    border-left-color: #e74c3c;
+}
+
+.toast.warning {
+    border-left-color: #e67e22;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    min-height: 100vh;
+    color: #e0e0e0;
+}
+
+.app {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* Header */
+header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+header h1 {
+    font-size: 2.5em;
+    color: #ffd700;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    margin-bottom: 20px;
+}
+
+/* Navigation */
+nav {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.nav-btn {
+    padding: 12px 24px;
+    border: 2px solid #ffd700;
+    background: transparent;
+    color: #ffd700;
+    font-size: 1em;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+
+.nav-btn:hover {
+    background: rgba(255, 215, 0, 0.1);
+    transform: translateY(-2px);
+}
+
+.nav-btn.active {
+    background: #ffd700;
+    color: #1a1a2e;
+}
+
+/* Panels */
+.panel {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 215, 0, 0.2);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 20px;
+    backdrop-filter: blur(10px);
+}
+
+.panel h2 {
+    color: #ffd700;
+    margin-bottom: 20px;
+    font-size: 1.5em;
+}
+
+.panel h3 {
+    color: #e0e0e0;
+    margin-bottom: 15px;
+    font-size: 1.2em;
+}
+
+/* Forms */
+.form-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.form-row input,
+.form-row select {
+    padding: 10px 14px;
+    border: 1px solid rgba(255, 215, 0, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+    border-radius: 6px;
+    font-size: 0.95em;
+    flex: 1;
+    min-width: 150px;
+}
+
+.form-row input:focus,
+.form-row select:focus {
+    outline: none;
+    border-color: #ffd700;
+    box-shadow: 0 0 8px rgba(255, 215, 0, 0.3);
+}
+
+.form-row input::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.form-row select option {
+    background: #1a1a2e;
+    color: #e0e0e0;
+}
+
+/* Buttons */
+.btn-primary {
+    padding: 10px 20px;
+    background: #ffd700;
+    color: #1a1a2e;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.95em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+}
+
+.btn-primary:hover {
+    background: #ffed4a;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(255, 215, 0, 0.3);
+}
+
+.btn-danger {
+    padding: 6px 12px;
+    background: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.3s ease;
+}
+
+.btn-danger:hover {
+    background: #c0392b;
+}
+
+.btn-secondary {
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.3s ease;
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Table */
+.table-container {
+    overflow-x: auto;
+    margin-top: 20px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+table th {
+    background: rgba(255, 215, 0, 0.15);
+    color: #ffd700;
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid rgba(255, 215, 0, 0.3);
+}
+
+table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+table tr:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+table td .actions {
+    display: flex;
+    gap: 6px;
+}
+
+/* Inline editing */
+td.editable {
+    cursor: pointer;
+    transition: background 0.2s;
+}
+td.editable:hover {
+    background: rgba(255, 215, 0, 0.08);
+}
+
+.inline-edit {
+    width: 100%;
+    min-width: 60px;
+    padding: 4px 6px;
+    border: 1px solid rgba(255, 215, 0, 0.5);
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+.inline-edit:focus {
+    outline: none;
+    border-color: #ffd700;
+    box-shadow: 0 0 6px rgba(255, 215, 0, 0.4);
+}
+.inline-edit option {
+    background: #1a1a2e;
+    color: #e0e0e0;
+}
+
+.btn-save,
+.btn-cancel {
+    padding: 6px 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.3s ease;
+}
+.btn-save {
+    background: #2ecc71;
+    color: white;
+}
+.btn-save:hover {
+    background: #27ae60;
+}
+.btn-cancel {
+    background: rgba(255, 255, 255, 0.15);
+    color: #e0e0e0;
+}
+.btn-cancel:hover {
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.action-cell {
+    white-space: nowrap;
+}
+
+/* Info text */
+.info {
+    margin-top: 15px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.9em;
+}
+
+/* Participants table */
+#participants-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+#participants-table th,
+#participants-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 215, 0, 0.1);
+}
+
+#participants-table th {
+    background: rgba(255, 215, 0, 0.1);
+    color: #ffd700;
+    font-weight: 600;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+#participants-table tr:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+#participants-table .btn-danger {
+    padding: 4px 8px;
+    font-size: 0.85em;
+}
+
+/* Tabs */
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Tournament cards */
+.tournament-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 215, 0, 0.15);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.tournament-card .info {
+    margin: 0;
+}
+
+.tournament-card .name {
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #e0e0e0;
+}
+
+.tournament-card .date {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.9em;
+}
+
+/* Bracket */
+#bracket-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+#bracket-controls select {
+    flex: 1;
+    min-width: 200px;
+    padding: 10px 14px;
+    border: 1px solid rgba(255, 215, 0, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+    border-radius: 6px;
+    font-size: 0.95em;
+}
+
+.bracket-round {
+    margin-bottom: 24px;
+}
+
+.bracket-round h3 {
+    color: #ffd700;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid rgba(255, 215, 0, 0.2);
+}
+
+.fight-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 215, 0, 0.15);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    transition: all 0.3s ease;
+}
+
+.fight-card:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 215, 0, 0.3);
+}
+
+.fight-card .fighters {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+}
+
+.fight-card .vs {
+    color: #ffd700;
+    font-weight: 700;
+    font-size: 1.1em;
+}
+
+.fight-card .fighter {
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-weight: 500;
+}
+
+.fight-card .fighter.winner {
+    background: rgba(46, 204, 113, 0.2);
+    color: #2ecc71;
+    border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.fight-card .fighter.loser {
+    background: rgba(231, 76, 60, 0.1);
+    color: #e74c3c;
+    border: 1px solid rgba(231, 76, 60, 0.2);
+    text-decoration: line-through;
+}
+
+.fight-card .fighter.pending {
+    background: rgba(255, 215, 0, 0.1);
+    color: #ffd700;
+    border: 1px solid rgba(255, 215, 0, 0.2);
+}
+
+.fight-card .fight-status {
+    font-size: 0.85em;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: rgba(255, 215, 0, 0.1);
+    color: #ffd700;
+}
+
+.fight-card .fight-status.completed {
+    background: rgba(46, 204, 113, 0.15);
+    color: #2ecc71;
+}
+
+/* Bracket Tree (новая древовидная сетка) */
+.bracket-weight-class {
+    margin-bottom: 32px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 10px;
+    padding: 16px;
+}
+
+.weight-title {
+    color: #ffd700;
+    font-size: 1.1em;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid rgba(255, 215, 0, 0.2);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.bracket-tree {
+    display: flex;
+    gap: 20px;
+    overflow-x: auto;
+    padding: 10px 0;
+}
+
+.bracket-round-col {
+    min-width: 200px;
+    flex: 1;
+}
+
+.round-label {
+    color: rgba(255, 215, 0, 0.7);
+    font-size: 0.85em;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    text-align: center;
+    letter-spacing: 1px;
+}
+
+.bracket-fight {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 215, 0, 0.15);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 12px;
+    transition: all 0.3s ease;
+}
+
+.bracket-fight:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 215, 0, 0.3);
+}
+
+.fighter-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+}
+
+.fighter-row.winner {
+    background: rgba(46, 204, 113, 0.15);
+    color: #2ecc71;
+}
+
+.fighter-row.loser {
+    background: rgba(231, 76, 60, 0.1);
+    color: #e74c3c;
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.fighter-row.pending {
+    background: rgba(255, 215, 0, 0.08);
+    color: #ffd700;
+}
+
+.fighter-name {
+    font-weight: 500;
+    font-size: 0.9em;
+    flex: 1;
+}
+
+.crown {
+    font-size: 1em;
+    margin-left: 6px;
+}
+
+.btn-fight-result {
+    width: 100%;
+    margin-top: 6px;
+    padding: 6px;
+    font-size: 0.8em;
+}
+
+.fight-method {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.85em;
+    padding: 4px;
+}
+
+/* Ячейка победителя внизу слота (финал и бронзовый бой) */
+.fight-result-cell {
+    margin-top: 6px;
+    padding: 6px 10px;
+    border-top: 1px solid rgba(255, 215, 0, 0.4);
+    background: rgba(255, 215, 0, 0.12);
+    color: #ffd700;
+    font-weight: 700;
+    font-size: 0.9em;
+    text-align: center;
+    border-radius: 0 0 6px 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fighter-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 0;
+}
+
+.btn-winner {
+    padding: 8px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: all 0.2s;
+    text-align: left;
+}
+
+.btn-winner:hover {
+    background: rgba(46, 204, 113, 0.2);
+    border-color: #2ecc71;
+    color: #2ecc71;
+}
+
+.btn-winner-1:hover {
+    background: rgba(52, 152, 219, 0.2);
+    border-color: #3498db;
+    color: #3498db;
+}
+
+.fighter-row.active {
+    background: rgba(52, 152, 219, 0.1);
+    border-left: 2px solid #3498db;
+}
+
+.fighter-row.empty {
+    opacity: 0.3;
+}
+
+/* Колонки раундов внутри сетки */
+.bracket-tree {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    overflow-x: auto;
+    padding-bottom: 8px;
+}
+
+.bracket-round-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-around;
+    gap: 12px;
+    min-width: 220px;
+}
+
+.round-label {
+    text-align: center;
+    color: #ffd700;
+    font-weight: bold;
+    font-size: 0.9em;
+    padding: 4px;
+    border-bottom: 1px solid rgba(255, 215, 0, 0.3);
+    margin-bottom: 4px;
+}
+
+/* Выпадающее меню способа победы */
+.method-menu {
+    margin-top: 8px;
+    border: 1px solid rgba(255, 215, 0, 0.4);
+    border-radius: 6px;
+    background: rgba(20, 20, 20, 0.95);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 10;
+}
+
+.method-menu-title {
+    color: #ffd700;
+    font-size: 0.85em;
+    text-align: center;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(255, 215, 0, 0.2);
+}
+
+.method-option {
+    padding: 7px 10px;
+    border: none;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+    cursor: pointer;
+    font-size: 0.9em;
+    text-align: left;
+    transition: background 0.15s;
+}
+
+.method-option:hover {
+    background: rgba(255, 215, 0, 0.2);
+    color: #ffd700;
+}
+
+/* Responsive для сетки */
+@media (max-width: 768px) {
+    .bracket-tree {
+        flex-direction: column;
+        gap: 10px;
+    }
+    .bracket-round-col {
+        min-width: 100%;
+    }
+}
+
+/* Modal */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+}
+
+.modal-content {
+    background: #1a1a2e;
+    margin: 10% auto;
+    padding: 30px;
+    border: 1px solid rgba(255, 215, 0, 0.3);
+    border-radius: 12px;
+    max-width: 500px;
+    position: relative;
+}
+
+.modal-content h2 {
+    color: #ffd700;
+    margin-bottom: 20px;
+}
+
+.close {
+    position: absolute;
+    right: 20px;
+    top: 15px;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.close:hover {
+    color: #ffd700;
+}
+
+#fight-details {
+    margin-bottom: 20px;
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+}
+
+#fight-details p {
+    margin-bottom: 8px;
+}
+
+#fight-winner option {
+    background: #1a1a2e;
+    color: #e0e0e0;
+}
+
+/* Results */
+.result-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 215, 0, 0.15);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+.result-card .result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.result-card .result-round {
+    color: #ffd700;
+    font-weight: 600;
+}
+
+.result-card .result-fighters {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.result-card .result-winner {
+    color: #2ecc71;
+    font-weight: 600;
+}
+
+.result-card .result-method {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.9em;
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 40px;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.empty-state p {
+    font-size: 1.1em;
+    margin-bottom: 10px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .app {
+        padding: 10px;
+    }
+
+    header h1 {
+        font-size: 1.8em;
+    }
+
+    .nav-btn {
+        padding: 8px 16px;
+        font-size: 0.85em;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
+
+    .form-row input,
+    .form-row select {
+        width: 100%;
+        min-width: unset;
+    }
+
+    .btn-primary {
+        width: 100%;
+    }
+
+    .tournament-card {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .fight-card {
+        flex-direction: column;
+        text-align: center;
+    }
+
+.modal-content {
+        margin: 20% 10px;
+        padding: 20px;
+    }
+}
+
+/* Weigh-in */
+.weighin-input {
+    width: 80px;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 215, 0, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+    border-radius: 4px;
+    font-size: 1em;
+    text-align: center;
+    transition: border-color 0.3s ease;
+}
+.weighin-input:focus {
+    outline: none;
+    border-color: #ffd700;
+    box-shadow: 0 0 8px rgba(255, 215, 0, 0.3);
+}
+.weighin-input.saved {
+    border-color: #2ecc71;
+}
+
+#weighin-table td {
+    vertical-align: middle;
+}
+#weighin-table .btn-save {
+    padding: 6px 14px;
+}
+
+/* Кнопка замены спортсмена в сетке */
+.btn-edit-fighter {
+    background: transparent;
+    border: none;
+    color: #ffd700;
+    cursor: pointer;
+    font-size: 0.8em;
+    padding: 2px 4px;
+    margin-left: 4px;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* Сетка соревнований */
+#bracket-container {
+    margin-top: 20px;
+}
+
+.bracket-weight-class {
+    margin-bottom: 30px;
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.weight-title {
+    color: #ffd700;
+    font-size: 1.3em;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid rgba(255, 215, 0, 0.3);
+}
+
+.bracket-tree {
+    display: flex;
+    gap: 20px;
+    overflow-x: auto;
+    padding: 10px 0;
+}
+
+.bracket-round-col {
+    flex: 1;
+    min-width: 200px;
+}
+
+.round-label {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+    font-weight: 600;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+}
+
+.day-tag {
+    display: inline-block;
+    background: rgba(255, 215, 0, 0.15);
+    color: #ffd700;
+    border: 1px solid rgba(255, 215, 0, 0.3);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 0.8em;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.bracket-fight {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.fighter-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.fighter-row.winner {
+    background: rgba(46, 204, 113, 0.2);
+    border-left: 3px solid #2ecc71;
+}
+
+.fighter-row.loser {
+    background: rgba(0, 0, 0, 0.35);
+    opacity: 0.45;
+}
+
+.fighter-row.pending {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.fighter-name {
+    color: #e0e0e0;
+    font-size: 0.95em;
+}
+
+.fighter-name.bye {
+    color: rgba(255, 255, 255, 0.3);
+    font-style: italic;
+}
+
+.crown {
+    margin-left: 5px;
+}
+
+.fight-method {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.85em;
+    margin-top: 5px;
+}
+
+.btn-fight-result {
+    width: 100%;
+    margin-top: 8px;
+}
+.fighter-row:hover .btn-edit-fighter {
+    opacity: 1;
+}
+.btn-edit-fighter:hover {
+    transform: scale(1.2);
+}
+
+.fighter-select {
+    width: 100%;
+    min-width: 160px;
+    padding: 4px 6px;
+    border: 1px solid #ffd700;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    border-radius: 4px;
+    font-size: 0.85em;
+    cursor: pointer;
+    color-scheme: dark;
+}
+
+.fighter-select option {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    color-scheme: dark;
+}
+
+/* Стили для выбора победителя в сетке */
+.fight-winner-select {
+    width: 100%;
+    margin-top: 6px;
+    padding: 4px 6px;
+    border: 1px solid #ffd700;
+    background: rgba(255, 215, 0, 0.1);
+    color: #ffd700;
+    border-radius: 4px;
+    font-size: 0.8em;
+    cursor: pointer;
+}
+
+.fight-winner-select option {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    color-scheme: dark;
+}
+.fighter-select option {
+    background: #ffffff;
+    color: #1a1a2e;
+}
+
+.fighter-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Выбор весовых категорий */
+.weight-class-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    margin: 4px 6px 4px 0;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 215, 0, 0.2);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 0.9em;
+}
+.weight-class-check:hover {
+    background: rgba(255, 215, 0, 0.08);
+    border-color: rgba(255, 215, 0, 0.4);
+}
+.weight-class-check input[type="checkbox"] {
+    accent-color: #ffd700;
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+#weight-classes-list {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+/* Жеребьевка */
+.lottery-category {
+    margin: 20px 0;
+    padding: 15px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 215, 0, 0.1);
+}
+.lottery-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+.lottery-table th,
+.lottery-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.lottery-table th {
+    background: rgba(255, 215, 0, 0.1);
+    color: #ffd700;
+    font-weight: 600;
+}
+.lottery-table tr:hover {
+    background: rgba(255, 215, 0, 0.05);
+}
+.lottery-table td strong {
+    color: #ffd700;
+    font-size: 1.1em;
+}
+
+.btn-edit-fighter {
+    background: rgba(255, 215, 0, 0.1);
+    border: 1px solid rgba(255, 215, 0, 0.3);
+    color: #ffd700;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1em;
+    transition: all 0.2s;
+}
+
+.btn-edit-fighter:hover {
+    background: rgba(255, 215, 0, 0.2);
+    border-color: #ffd700;
+}
+
+/* В жеребьёвке кнопка редактирования должна быть видна всегда (базовое правило скрывает её до наведения) */
+.lottery-table .btn-edit-fighter {
+    opacity: 1;
+}
+
+/* Собственный выпадающий список для выбора соперника (вместо нативного <select>) */
+.athlete-picker {
+    position: fixed;
+    z-index: 2000;
+    min-width: 260px;
+    max-width: 320px;
+    max-height: 60vh;
+    overflow-y: auto;
+    background: rgba(22, 24, 44, 0.98);
+    border: 1px solid rgba(255, 215, 0, 0.4);
+    border-radius: 8px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.athlete-picker .method-option {
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.athlete-picker .method-option.selected {
+    background: rgba(255, 215, 0, 0.25);
+    border-left: 3px solid #ffd700;
+}
+.athlete-picker .picker-empty {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.9em;
+    text-align: center;
+    padding: 8px;
+}
+
+.lottery-select {
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 0.9em;
+    width: 100%;
+    cursor: pointer;
+}
+
+.lottery-select:focus {
+    outline: none;
+    border-color: #ffd700;
+}
+
+/* Выбор дня в жеребьёвке (по числу дней турнира) */
+.lottery-day-select {
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 0.85em;
+    cursor: pointer;
+    color-scheme: dark;
+}
+.lottery-day-select option {
+    background: #1a1a2e;
+    color: #e0e0e0;
+}
+
+/* Метка дня в раундах сетки */
+.day-tag {
+    display: inline-block;
+    background: rgba(52, 152, 219, 0.2);
+    border: 1px solid #3498db;
+    color: #6fc3ff;
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-size: 0.8em;
+    font-weight: 700;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+/* Вкладки дней в разделе «Сетка» */
+.bracket-days {
+    margin-top: 8px;
+}
+.day-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.day-tab {
+    padding: 8px 20px;
+    border: 1px solid rgba(255, 215, 0, 0.35);
+    background: rgba(255, 255, 255, 0.06);
+    color: #e0e0e0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.95em;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+.day-tab:hover {
+    background: rgba(255, 215, 0, 0.12);
+}
+.day-tab.active {
+    background: #ffd700;
+    color: #1a1a2e;
+    border-color: #ffd700;
+}
+.day-panel {
+    display: none;
+}
+.day-panel.active {
+    display: block;
+}
+
+/* Баннер завершённой весовой категории (авто-публикация результата) */
+.weight-championship {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 16px;
+    padding: 14px 18px;
+    background: linear-gradient(135deg, rgba(255, 215, 0, 0.18), rgba(46, 204, 113, 0.12));
+    border: 1px solid rgba(255, 215, 0, 0.45);
+    border-radius: 10px;
+    animation: champGlow 2.5s ease-in-out infinite alternate;
+}
+.weight-championship .wt-champ-crown {
+    font-size: 2em;
+    line-height: 1;
+}
+.weight-championship .wt-champ-title {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.weight-championship .wt-champ-name {
+    color: #ffd700;
+    font-size: 1.4em;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.weight-championship .wt-champ-silver {
+    color: #c0c0c0;
+    font-size: 1.1em;
+    font-weight: 600;
+    line-height: 1.2;
+}
+.weight-championship .wt-champ-day {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.85em;
+}
+@keyframes champGlow {
+    from { box-shadow: 0 0 6px rgba(255, 215, 0, 0.15); }
+    to { box-shadow: 0 0 20px rgba(255, 215, 0, 0.4); }
+}
+
+/* Печатная версия: показываем только результаты */
+@media print {
+    body {
+        background: #fff;
+        color: #000;
+    }
+    header,
+    nav,
+    .nav-btn,
+    .panel:not(#tab-results),
+    #tab-results .form-row,
+    #tab-results .btn-secondary,
+    #results-tournament-select,
+    .btn-primary,
+    .btn-secondary,
+    .btn-danger,
+    #toast-container {
+        display: none !important;
+    }
+    #tab-results,
+    #tab-results .panel {
+        display: block !important;
+        background: #fff;
+        color: #000;
+        border: none;
+    }
+    #tab-results h2,
+    #tab-results .result-card .result-round,
+    #tab-results .result-card .result-winner {
+        color: #000;
+    }
+    .result-card {
+        border: 1px solid #ccc;
+        background: #fff;
+        color: #000;
+        page-break-inside: avoid;
+    }
+}

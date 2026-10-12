@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Соревнования по боксу</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="style.css?v=20261012c">
+</head>
+<body>
+    <div id="toast-container"></div>
+    <div class="app">
+        <header>
+            <h1>🥊 Соревнования по боксу</h1>
+<nav>
+                <button class="nav-btn active" data-tab="tournament">🏆 Соревнование</button>
+                <button class="nav-btn" data-tab="participants">👥 Участники</button>
+                <button class="nav-btn" data-tab="weighin">⚖️ Взвешивание</button>
+                <button class="nav-btn" data-tab="lottery">🎲 Жеребьевка</button>
+                <button class="nav-btn" data-tab="bracket">Сетка</button>
+                <button class="nav-btn" data-tab="results">Результаты</button>
+            </nav>
+            <div style="margin-top:10px;">
+                <button class="btn-secondary" onclick="App.checkUpdates()" title="Проверить наличие новых версий приложения в GitHub">🔄 Проверить обновления</button>
+                <span id="update-status" class="info" style="margin-left:10px;"></span>
+            </div>
+        </header>
+
+<main>
+            <!-- Вкладка: Со (первая, активная по умолчанию) -->
+            <section id="tab-tournament" class="tab-content active">
+                <div class="panel">
+<h2>Создание соревнования</h2>
+                    <form id="tournament-form" autocomplete="off">
+                        <div class="form-row">
+                            <input type="text" id="tournament-name" placeholder="Название соревнования" required autocomplete="off">
+                            <input type="date" id="tournament-date-from" placeholder="Дата с" required autocomplete="off">
+                            <input type="date" id="tournament-date-to" placeholder="Дата по" required autocomplete="off">
+                            <input type="number" id="tournament-days" placeholder="Дней" min="1" max="14" value="1" title="Число дней соревнования" style="max-width:100px;" autocomplete="off">
+                            <button type="submit" class="btn-primary">🏆 Создать соревнование</button>
+                        </div>
+                    </form>
+                    <div class="tournament-list">
+                        <h3>Соревнования</h3>
+                        <div class="import-section" style="margin-top: 15px; padding: 15px; border: 1px solid rgba(255,215,0,0.15); border-radius: 6px; background: rgba(255,255,255,0.05);">
+                            <p style="margin: 0 0 10px 0; font-size: 0.9em; color: rgba(255,255,255,0.7);">📥 Импорт участников из Excel</p>
+                            <div class="form-row">
+                                <input type="file" id="excel-import" accept=".xls,.xlsx" style="flex:2;">
+                                <button id="import-excel-btn" class="btn-primary" style="flex:0;">Импорт</button>
+                            </div>
+                            <p class="info" style="margin-top:8px; font-size:0.8em;">Формат: Ф.И.О.; Год рожд.; Вес; Пол; Разряд; Регион; Тренер</p>
+                            <p class="info" style="margin-top:4px; font-size:0.8em; color: #ffd700;">Все участники автоматически привяжутся к соревнованию по умолчанию</p>
+                        </div>
+                        <div id="tournaments-container"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Вкладка: Участники -->
+            <section id="tab-participants" class="tab-content">
+                <div class="panel">
+                    <h2>Управление участниками соревнования</h2>
+                    <div id="participant-tournament-controls" style="margin-bottom:15px;">
+<select id="participant-tournament-select" style="min-width:300px;padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
+                            <option value="">-- Выберите соревнование --</option>
+                        </select>
+                    </div>
+                    <form id="participant-form" autocomplete="off">
+                        <div class="form-row">
+                            <select id="participant-athlete-select" style="flex:2;min-width:250px;padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
+                                <option value="">-- Выберите спортсмена --</option>
+                            </select>
+                            <button type="submit" class="btn-primary">➕ Добавить участника</button>
+                        </div>
+                        <button type="button" id="add-manual-athlete-btn" class="btn-secondary" style="margin-top:10px;">✏️ Добавить участника вручную</button>
+                    </form>
+                    <div id="manual-athlete-form" style="display:none; margin-top:15px; padding:15px; background:rgba(255,215,0,0.05); border-radius:8px; border:1px solid rgba(255,215,0,0.2);">
+                        <h3 style="color:#ffd700; margin-bottom:10px; font-size:1em;" id="manual-form-title">➕ Новый спортсмен</h3>
+                        <form id="manual-athlete-input-form">
+                            <input type="hidden" id="manual-athlete-id">
+                            <div class="form-row" style="margin-bottom:8px;">
+                                <input type="text" id="manual-name" placeholder="Ф.И.О." required style="flex:3;">
+                                <input type="number" id="manual-birth-year" placeholder="Год рожд." required min="1900" max="2020" style="flex:1;">
+                            </div>
+                            <div class="form-row" style="margin-bottom:8px;">
+                                <input type="number" id="manual-weight" placeholder="Вес (кг)" required step="0.1" min="30" max="200" style="flex:1;">
+                                <select id="manual-gender" required style="flex:1;">
+                                    <option value="мужской">Мужской</option>
+                                    <option value="женский">Женский</option>
+                                </select>
+                                <input type="text" id="manual-rank" placeholder="Разряд" style="flex:1;">
+                            </div>
+                            <div class="form-row" style="margin-bottom:8px;">
+                                <input type="text" id="manual-region" placeholder="Регион" style="flex:2;">
+                                <input type="text" id="manual-coach" placeholder="Тренер" style="flex:2;">
+                            </div>
+                            <div class="form-row">
+                                <button type="submit" class="btn-primary" id="manual-submit-btn">💾 Добавить</button>
+                                <button type="button" id="cancel-manual-athlete" class="btn-secondary">✖ Отмена</button>
+                            </div>
+                        </form>
+                    </div>
+                    <div style="margin-top:15px;">
+                        <div class="form-row" style="margin-bottom:10px;">
+                            <input type="text" id="participants-search" placeholder="🔍 Поиск по Ф.И.О., региону, тренеру..." style="flex:1;">
+                            <button type="button" id="participants-search-btn" class="btn-primary">🔍 Найти</button>
+                            <button type="button" id="participants-clear-btn" class="btn-secondary">✖ Сбросить</button>
+                        </div>
+                        <table id="participants-table">
+                            <thead>
+                                <tr>
+                                    <th>№</th>
+                                    <th>Ф.И.О.</th>
+                                    <th>Вес (кг)</th>
+                                    <th>Пол</th>
+                                    <th>Год рожд.</th>
+                                    <th>Разряд</th>
+                                    <th>Регион</th>
+                                    <th>Тренер</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="participants-list"></tbody>
+                        </table>
+                        <p class="info" id="participants-count">Участников: 0</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Вкладка: Взвешивание -->
+            <section id="tab-weighin" class="tab-content">
+                <div class="panel">
+                    <h2>Взвешивание спортсменов</h2>
+                    <div id="weighin-controls">
+<select id="weighin-tournament-select">
+                            <option value="">-- Выберите соревнование --</option>
+                        </select>
+                        <button id="generate-weighin" class="btn-primary">📋 Загрузить спортсменов</button>
+                    </div>
+                    <div id="weighin-container"></div>
+                    <table id="weighin-table">
+                        <thead>
+                            <tr>
+                                <th>№</th>
+                                <th>Ф.И.О.</th>
+                                <th>Год рожд.</th>
+                                <th>Пол</th>
+                                <th>Регион</th>
+                                <th>Вес (кг)</th>
+                                <th>Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody id="weighin-list"></tbody>
+                    </table>
+                    <p class="info" id="weighin-count">Спортсменов: 0</p>
+                </div>
+            </section>
+
+            <!-- Вкладка: Жеребьевка -->
+            <section id="tab-lottery" class="tab-content">
+                <div class="panel">
+                    <h2>Жеребьевка</h2>
+                    <div id="lottery-controls">
+<select id="lottery-tournament-select">
+                            <option value="">-- Выберите соревнование --</option>
+                        </select>
+                        <button id="generate-lottery" class="btn-primary">🎲 Провести жеребьевку</button>
+                    </div>
+                    <div id="lottery-container"></div>
+                    <div id="lottery-results"></div>
+                </div>
+            </section>
+
+            <!-- Вкладка: Сетка -->
+            <section id="tab-bracket" class="tab-content">
+                <div class="panel">
+                    <h2>Сетка соревнований</h2>
+                    <div id="bracket-controls">
+                        <select id="bracket-tournament-select">
+                            <option value="">-- Выберите соревнование --</option>
+                        </select>
+                        <button id="generate-bracket" class="btn-primary">🔄 Сформировать сетку</button>
+                        <button id="clear-bracket" class="btn-secondary" style="background:rgba(255,0,0,0.1);border-color:rgba(255,0,0,0.3);color:#ff6b6b;" title="Сбросить сетку в первоначальный вид (удалить все результаты боёв)">🔄 Сбросить сетку</button>
+                    </div>
+                    <div id="weight-classes-selector" style="margin-top:15px; display:none;">
+                        <!-- Блок выбора категорий временно отключён (закомментирован)
+                        <p class="info" style="margin-bottom:8px;">Выберите весовые категории для сетки:</p>
+                        <div id="weight-classes-list"></div>
+                        <button type="button" id="select-all-weight-classes" class="btn-secondary" style="margin-top:8px;">Выбрать все</button>
+                        -->
+                    </div>
+                    <div id="bracket-container"></div>
+                </div>
+            </section>
+
+            <!-- Вкладка: Результаты -->
+<section id="tab-results" class="tab-content">
+                <div class="panel">
+                    <h2>Результаты</h2>
+<select id="results-tournament-select">
+                            <option value="">-- Выберите соревнование --</option>
+                        </select>
+                        <button id="print-results-btn" class="btn-secondary" onclick="App.printResults()">🖨️ Печать результатов</button>
+                    <div id="results-container"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Модальное окно для боя -->
+    <div id="fight-modal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2 id="fight-title">Бой</h2>
+            <div id="fight-details"></div>
+            <form id="fight-result-form">
+                <div class="form-row">
+                    <select id="fight-winner" required>
+                        <option value="">-- Выберите победителя --</option>
+                    </select>
+                    <select id="fight-method">
+                        <option value="единогласное">Единогласное решение</option>
+                        <option value="раздельное">Раздельное решение</option>
+                        <option value="нокаут">Нокаут (KO)</option>
+                        <option value="технический нокаут">Технический нокаут (TKO)</option>
+                        <option value="отказ">Отказ соперника</option>
+                    </select>
+                    <button type="submit" class="btn-primary">✅ Подтвердить результат</button>
+                </div>
+                <div class="form-row" style="margin-top:10px;">
+                    <button type="button" id="reset-fight-result" class="btn-danger" style="width:100%;">↩️ Отменить результат</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="app.js?v=20261012c"></script>
+</body>
+</html>

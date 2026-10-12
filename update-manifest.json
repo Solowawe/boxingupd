@@ -1,0 +1,13 @@
+{
+  "version": "1.0.0",
+  "files": [
+    "app.js",
+    "index.html",
+    "style.css",
+    "login.html",
+    "server.py",
+    "database.py",
+    "app.py",
+    "requirements.txt"
+  ]
+}

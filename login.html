@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вход — Соревнования по боксу</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .login-wrapper {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .login-card {
+            width: 100%;
+            max-width: 380px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 215, 0, 0.25);
+            border-radius: 12px;
+            padding: 32px 28px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        .login-card h1 {
+            text-align: center;
+            font-size: 1.4em;
+            margin-bottom: 6px;
+        }
+        .login-card .login-sub {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.55);
+            font-size: 0.9em;
+            margin-bottom: 24px;
+        }
+        .login-card label {
+            display: block;
+            margin-bottom: 6px;
+            color: rgba(255, 255, 255, 0.75);
+            font-size: 0.9em;
+        }
+        .login-card input {
+            width: 100%;
+            padding: 11px 12px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            font-size: 1em;
+            box-sizing: border-box;
+        }
+        .login-card input:focus {
+            outline: none;
+            border-color: #ffd700;
+        }
+        .login-card .btn-primary {
+            width: 100%;
+            padding: 12px;
+            font-size: 1em;
+        }
+        .login-error {
+            display: none;
+            margin-bottom: 14px;
+            padding: 10px;
+            border-radius: 6px;
+            background: rgba(231, 76, 60, 0.15);
+            border: 1px solid rgba(231, 76, 60, 0.4);
+            color: #ff6b6b;
+            font-size: 0.9em;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-wrapper">
+        <div class="login-card">
+            <h1>🥊 Соревнования по боксу</h1>
+            <p class="login-sub">Войдите, чтобы продолжить</p>
+
+            <div id="login-error" class="login-error"></div>
+
+            <form id="login-form" autocomplete="off">
+                <label for="login">Логин</label>
+                <input type="text" id="login" name="login" placeholder="Логин" required autofocus>
+                <label for="password">Пароль</label>
+                <input type="password" id="password" name="password" placeholder="Пароль" required>
+                <button type="submit" class="btn-primary">Войти</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const errBox = document.getElementById('login-error');
+            errBox.style.display = 'none';
+
+            const login = document.getElementById('login').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const res = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ login, password })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    window.location.href = '/';
+                } else {
+                    errBox.textContent = data.message || 'Ошибка входа';
+                    errBox.style.display = 'block';
+                }
+            } catch (err) {
+                errBox.textContent = 'Ошибка соединения с сервером';
+                errBox.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>
