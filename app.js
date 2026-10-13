@@ -1804,7 +1804,9 @@ setupExport() {
         athletes.sort((a, b) => a.weight - b.weight || a.birth_year - b.birth_year);
 
         const n = athletes.length;
-        if (n < 2) return [];
+        if (n < 1) return [];
+        // Один спортсмен без соперника — попадёт в жеребьёвку и станет победителем автоматом
+        if (n === 1) return [athletes[0]];
 
         function seedOrder(m) {
             // m — степень двойки; стандартный порядок расстановки сеянных (1 и 2 в разных половинах)
@@ -1819,14 +1821,10 @@ setupExport() {
         }
 
         const size = 1 << Math.ceil(Math.log2(n));       // ближайшая сверху степень двойки
-        const order = seedOrder(size).slice(0, n);        // позиции слотов
-        const slots = order.map(seed => athletes[seed - 1]);
-
-        const pairs = [];
-        for (let i = 0; i + 1 < slots.length; i += 2) {
-            pairs.push([slots[i], slots[i + 1]]);
-        }
-        return pairs;
+        const order = seedOrder(size);             // полный порядок сидений (длина = size)
+        // Номер сидения > n — свободный слот (бай), ставим null
+        const slots = order.map(seed => seed <= n ? athletes[seed - 1] : null);
+        return slots;  // массив длины size, null = бай
     },
 
     async performLottery(tournamentId) {
@@ -1868,34 +1866,24 @@ setupExport() {
             weightGroups[key].push(a);
         });
 
-        // Умный подбор соперников по весу и возрасту
+        // Умный подбор соперников по весу и возрасту (олимпийская система)
         const lotteryResults = {};
         Object.entries(weightGroups).forEach(([weightClass, group]) => {
-            const pairs = this._pairAndPlaceLottery(group);
+            const ordered = this._pairAndPlaceLottery(group); // массив слотов, null = бай
             let slot = 1;
-            pairs.forEach(pair => {
+            ordered.forEach(ath => {
+                if (ath === null) return; // бай — в жеребьёвку не попадает
                 lotteryResults[weightClass] = lotteryResults[weightClass] || [];
                 lotteryResults[weightClass].push({
-                    athlete_id: pair[0].id,
+                    athlete_id: ath.id,
                     slot: slot++,
                     day: 1,
-                    name: pair[0].name,
-                    weight: pair[0].weight,
-                    gender: pair[0].gender,
-                    birth_year: pair[0].birth_year,
-                    region: pair[0].region,
-                    coach: pair[0].coach
-                });
-                lotteryResults[weightClass].push({
-                    athlete_id: pair[1].id,
-                    slot: slot++,
-                    day: 1,
-                    name: pair[1].name,
-                    weight: pair[1].weight,
-                    gender: pair[1].gender,
-                    birth_year: pair[1].birth_year,
-                    region: pair[1].region,
-                    coach: pair[1].coach
+                    name: ath.name,
+                    weight: ath.weight,
+                    gender: ath.gender,
+                    birth_year: ath.birth_year,
+                    region: ath.region,
+                    coach: ath.coach
                 });
             });
         });
@@ -1981,34 +1969,24 @@ setupExport() {
             weightGroups[key].push(a);
         });
 
-        // Умный подбор соперников по весу и возрасту
+        // Умный подбор соперников по весу и возрасту (олимпийская система)
         const lotteryResults = {};
         Object.entries(weightGroups).forEach(([weightClass, group]) => {
-            const pairs = this._pairAndPlaceLottery(group);
+            const ordered = this._pairAndPlaceLottery(group); // массив слотов, null = бай
             let slot = 1;
-            pairs.forEach(pair => {
+            ordered.forEach(ath => {
+                if (ath === null) return; // бай — в жеребьёвку не попадает
                 lotteryResults[weightClass] = lotteryResults[weightClass] || [];
                 lotteryResults[weightClass].push({
-                    athlete_id: pair[0].id,
+                    athlete_id: ath.id,
                     slot: slot++,
                     day: 1,
-                    name: pair[0].name,
-                    weight: pair[0].weight,
-                    gender: pair[0].gender,
-                    birth_year: pair[0].birth_year,
-                    region: pair[0].region,
-                    coach: pair[0].coach
-                });
-                lotteryResults[weightClass].push({
-                    athlete_id: pair[1].id,
-                    slot: slot++,
-                    day: 1,
-                    name: pair[1].name,
-                    weight: pair[1].weight,
-                    gender: pair[1].gender,
-                    birth_year: pair[1].birth_year,
-                    region: pair[1].region,
-                    coach: pair[1].coach
+                    name: ath.name,
+                    weight: ath.weight,
+                    gender: ath.gender,
+                    birth_year: ath.birth_year,
+                    region: ath.region,
+                    coach: ath.coach
                 });
             });
         });
