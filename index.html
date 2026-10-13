@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Соревнования по боксу</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="style.css?v=20261012c">
+    <link rel="stylesheet" href="style.css?v=20261012n">
 </head>
 <body>
     <div id="toast-container"></div>
@@ -36,20 +36,30 @@
                             <input type="text" id="tournament-name" placeholder="Название соревнования" required autocomplete="off">
                             <input type="date" id="tournament-date-from" placeholder="Дата с" required autocomplete="off">
                             <input type="date" id="tournament-date-to" placeholder="Дата по" required autocomplete="off">
-                            <input type="number" id="tournament-days" placeholder="Дней" min="1" max="14" value="1" title="Число дней соревнования" style="max-width:100px;" autocomplete="off">
+                            <!-- Счётчик дней закомментирован — число дней берётся из разницы дат
+                            <input type="number" id="tournament-days" placeholder="Дней" min="1" max="14" value="1" title="Число дней соревнования" style="max-width:100px;" autocomplete="off"> -->
                             <button type="submit" class="btn-primary">🏆 Создать соревнование</button>
                         </div>
                     </form>
                     <div class="tournament-list">
                         <h3>Соревнования</h3>
                         <div class="import-section" style="margin-top: 15px; padding: 15px; border: 1px solid rgba(255,215,0,0.15); border-radius: 6px; background: rgba(255,255,255,0.05);">
-                            <p style="margin: 0 0 10px 0; font-size: 0.9em; color: rgba(255,255,255,0.7);">📥 Импорт участников из Excel</p>
+                            <p style="margin: 0 0 10px 0; font-size: 0.9em; color: rgba(255,255,255,0.7);">📥 Импорт списка спортсменов (Word / Excel)</p>
                             <div class="form-row">
-                                <input type="file" id="excel-import" accept=".xls,.xlsx" style="flex:2;">
-                                <button id="import-excel-btn" class="btn-primary" style="flex:0;">Импорт</button>
+                                <input type="file" id="athletes-import" accept=".docx,.xls,.xlsx" style="flex:2;">
+                                <select id="athletes-import-gender" style="flex:0;">
+                                    <option value="мужской">Мужской</option>
+                                    <option value="женский">Женский</option>
+                                </select>
+                                <button id="import-athletes-btn" class="btn-primary" style="flex:0;">Импорт</button>
                             </div>
-                            <p class="info" style="margin-top:8px; font-size:0.8em;">Формат: Ф.И.О.; Год рожд.; Вес; Пол; Разряд; Регион; Тренер</p>
-                            <p class="info" style="margin-top:4px; font-size:0.8em; color: #ffd700;">Все участники автоматически привяжутся к соревнованию по умолчанию</p>
+                            <div class="form-row" style="margin-top:8px;">
+                                <label style="margin-right:16px; font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="append" checked style="accent-color:#ffd700;"> Дополнить список</label>
+                                <label style="font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="replace" style="accent-color:#ffd700;"> Заменить список (удалить старых)</label>
+                            </div>
+                            <p class="info" style="margin-top:8px; font-size:0.8em;">
+                                Word: столбцы «ФИО», «Весовая категория», «Тренер». Excel: Ф.И.О.; Год рожд.; Вес; Пол; Разряд; Регион; Тренер.
+                            </p>
                         </div>
                         <div id="tournaments-container"></div>
                     </div>
@@ -66,13 +76,18 @@
                         </select>
                     </div>
                     <form id="participant-form" autocomplete="off">
-                        <div class="form-row">
+                        <div class="form-row" style="margin-bottom:8px;">
                             <select id="participant-athlete-select" style="flex:2;min-width:250px;padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
-                                <option value="">-- Выберите спортсмена --</option>
+                                <option value="">-- Участников пока нет --</option>
                             </select>
-                            <button type="submit" class="btn-primary">➕ Добавить участника</button>
                         </div>
-                        <button type="button" id="add-manual-athlete-btn" class="btn-secondary" style="margin-top:10px;">✏️ Добавить участника вручную</button>
+                        <div class="form-row" style="margin-bottom:8px;">
+                            <select id="participant-add-select" style="flex:2;min-width:250px;padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
+                                <option value="">-- Добавить спортсмена (не в турнире) --</option>
+                            </select>
+                            <button type="submit" class="btn-primary" id="add-participant-btn">➕ Добавить</button>
+                        </div>
+                        <button type="button" id="add-manual-athlete-btn" class="btn-secondary" style="margin-top:4px;">✏️ Добавить участника вручную</button>
                     </form>
                     <div id="manual-athlete-form" style="display:none; margin-top:15px; padding:15px; background:rgba(255,215,0,0.05); border-radius:8px; border:1px solid rgba(255,215,0,0.2);">
                         <h3 style="color:#ffd700; margin-bottom:10px; font-size:1em;" id="manual-form-title">➕ Новый спортсмен</h3>
@@ -235,6 +250,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="app.js?v=20261012c"></script>
+    <script src="app.js?v=20261012n"></script>
 </body>
 </html>

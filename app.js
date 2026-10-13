@@ -259,6 +259,8 @@ const App = {
     async init() {
         this.setupTabs();
         this.setupExcelImport();
+        this.setupWordImport();
+        this.setupAthletesImport();
         this.setupExport();
         this.setupTournamentForm();
         this.setupParticipantForm();
@@ -431,6 +433,14 @@ const App = {
         const athleteSelect = document.getElementById('participant-athlete-select');
         const form = document.getElementById('participant-form');
 
+        const updateParticipantControls = () => {
+            const hasTournament = !!select.value;
+            if (athleteSelect) athleteSelect.disabled = !hasTournament;
+            const addBtn = document.getElementById('add-participant-btn');
+            if (addBtn) addBtn.disabled = !hasTournament;
+        };
+        updateParticipantControls();
+
         // Кнопка "Добавить вручную"
         const addManualBtn = document.getElementById('add-manual-athlete-btn');
         const manualForm = document.getElementById('manual-athlete-form');
@@ -566,8 +576,8 @@ const App = {
             });
         }
 
-        // Загружаем соревнования
-        const loadTournaments = async () => {
+        // Загружаем соревнования (переиспользуемо — вызывается и после создания турнира)
+        this.loadParticipantSelect = async () => {
             try {
                 const tournaments = await API.getTournaments();
                 select.innerHTML = '<option value="">-- Выберите соревнование --</option>';
@@ -584,13 +594,15 @@ const App = {
                     const opt = select.querySelector(`option[value="${defaultId}"]`);
                     if (opt) opt.selected = true;
                 }
+                updateParticipantControls();
             } catch (err) {
                 console.error('Ошибка загрузки соревнований:', err);
             }
         };
 
-        loadTournaments();
+        this.loadParticipantSelect();
         select.addEventListener('change', async () => {
+            updateParticipantControls();
             await this.renderParticipants();
         });
 
@@ -619,7 +631,8 @@ const App = {
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
             const tournamentId = parseInt(select.value);
-            const athleteId = parseInt(athleteSelect.value);
+            const addSelect = document.getElementById('participant-add-select');
+            const athleteId = parseInt(addSelect ? addSelect.value : '');
 
             if (!tournamentId || !athleteId) {
                 toast('Выберите соревнование и спортсмена!');
@@ -628,9 +641,10 @@ const App = {
 
             try {
                 await API.addTournamentAthlete(tournamentId, athleteId);
-                athleteSelect.value = '';
+                if (addSelect) addSelect.value = '';
                 await this.renderParticipants();
-                await loadCompetitions(); // Обновляем список соревнований
+                if (this.loadParticipantSelect) await this.loadParticipantSelect(); // Обновляем селект турнира
+                await this.renderTournaments(); // Обновляем счётчики на карточках
             } catch (err) {
                 toast('Ошибка: ' + err.message);
             }
@@ -668,6 +682,30 @@ const App = {
 
             tbody.innerHTML = '';
             count.textContent = `Участников: ${participants.length}`;
+            this._participantsCache = participants;
+
+            // Список «Участники турнира» — строго по записям в БД (tournament_athletes)
+            const selParts = document.getElementById('participant-athlete-select');
+            if (selParts) {
+                if (participants.length === 0) {
+                    selParts.innerHTML = '<option value="">-- Участников пока нет --</option>';
+                } else {
+                    selParts.innerHTML = participants.map(p =>
+                        `<option value="${p.id}">${this.escapeHtml(p.name)} (${p.weight} кг, ${p.gender})</option>`).join('');
+                }
+            }
+            // Список «Добавить спортсмена» — только НЕ состоящие в турнире
+            const selAdd = document.getElementById('participant-add-select');
+            if (selAdd) {
+                const partIds = new Set(tournamentAthleteIds);
+                const available = athletes.filter(a => !partIds.has(a.id));
+                if (available.length === 0) {
+                    selAdd.innerHTML = '<option value="">-- Все спортсмены уже в турнире --</option>';
+                } else {
+                    selAdd.innerHTML = '<option value="">-- Добавить спортсмена (не в турнире) --</option>' +
+                        available.map(a => `<option value="${a.id}">${this.escapeHtml(a.name)} (${a.weight} кг, ${a.gender})</option>`).join('');
+                }
+            }
 
             if (participants.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Нет участников. Добавьте спортсменов через форму выше</td></tr>';
@@ -687,7 +725,11 @@ const App = {
                     <td>${this.escapeHtml(a.rank || '-')}</td>
                     <td>${this.escapeHtml(a.region || '-')}</td>
                     <td>${this.escapeHtml(a.coach || '-')}</td>
-                    <td><button class="btn-danger" onclick="App.removeParticipant(${tournamentId}, ${a.id})">🗑 Удалить</button></td>
+                    <td>
+                        <button class="btn-secondary" onclick="App.editParticipant(${tournamentId}, ${a.id})" title="Редактировать данные спортсмена">✏️</button>
+                        <button class="btn-danger" onclick="App.removeParticipant(${tournamentId}, ${a.id})" title="Убрать из этого турнира">🗑</button>
+                        <button class="btn-danger" onclick="App.deleteAthleteFromDb(${a.id})" title="Удалить из базы полностью" style="margin-left:4px;">✖</button>
+                    </td>
                 `;
                 tr.addEventListener('dblclick', (e) => {
                     if (e.target.tagName === 'BUTTON') return;
@@ -697,6 +739,9 @@ const App = {
             });
         } catch (err) {
             console.error('Ошибка загрузки участников:', err);
+            // Чистим таблицу, чтобы не оставались «фантомные» строки от старого рендера
+            tbody.innerHTML = '';
+            if (count) count.textContent = 'Участников: 0';
         }
     },
 
@@ -708,6 +753,13 @@ const App = {
         } catch (err) {
             toast('Ошибка: ' + err.message);
         }
+    },
+
+    // Открытие формы редактирования по id участника (через кэш текущего списка)
+    editParticipant(tournamentId, id) {
+        const a = (this._participantsCache || []).find(x => x.id === id);
+        if (!a) { toast('Спортсмен не найден', 'error'); return; }
+        this.editAthleteFromRow(tournamentId, a);
     },
 
     editAthleteFromRow(tournamentId, athlete) {
@@ -1042,6 +1094,34 @@ const App = {
         }
     },
 
+    // Полное удаление спортсмена из базы (отвязка от всех турниров)
+    async deleteAthleteFromDb(id) {
+        if (!confirm('Удалить спортсмена из базы полностью? Он будет отвязан от всех турниров, а его данные удалены.')) return;
+        try {
+            await API.deleteAthlete(id);
+            await this.renderParticipants();
+            await this.renderTournaments();
+            if (this.loadParticipantSelect) await this.loadParticipantSelect();
+        } catch (err) {
+            toast('Ошибка: ' + err.message, 'error');
+        }
+    },
+
+    // Удалить ВСЕХ спортсменов из базы
+    async deleteAllAthletes() {
+        if (!confirm('Удалить ВСЕХ спортсменов из базы? Это действие необратимо — будут удалены все бойцы и их связи с турнирами.')) return;
+        try {
+            const r = await fetch('/api/athletes/clear', { method: 'DELETE' });
+            if (!r.ok) throw new Error('Не удалось очистить');
+            toast('✅ Все спортсмены удалены', 'success');
+            await this.renderParticipants();
+            await this.renderTournaments();
+            if (this.loadParticipantSelect) await this.loadParticipantSelect();
+        } catch (e) {
+            toast('Ошибка: ' + e.message, 'error');
+        }
+    },
+
     setupExcelImport() {
         const btn = document.getElementById('import-excel-btn');
         if (!btn) return;
@@ -1169,8 +1249,170 @@ const App = {
         });
     },
 
-    setupExport() {
-        // Экспорт теперь реализован через кнопку "📊 Excel" в карточке соревнования
+    setupWordImport() {
+        const btn = document.getElementById('import-word-btn');
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+            const fileInput = document.getElementById('word-import');
+            const file = fileInput.files[0];
+            if (!file) { toast('Выберите Word-файл!'); return; }
+            const gender = document.getElementById('word-import-gender')?.value || 'мужской';
+            const wantReplace = document.getElementById('word-replace')?.checked;
+            if (wantReplace && !confirm('Заменить текущий список спортсменов? ВСЕ существующие бойцы (включая текущих) будут удалены, останется только импортированный состав.')) {
+                return;
+            }
+            try {
+                const fd = new FormData();
+                fd.append('file', file);
+                fd.append('gender', gender);
+                if (wantReplace) fd.append('replace', '1');
+                const res = await fetch('/api/import/docx', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    toast('❌ ' + (data.error || 'Ошибка импорта'), 'error');
+                    return;
+                }
+                // Привязываем новых бойцов к соревнованию по умолчанию
+                const defaultId = this.getDefaultTournamentId();
+                const ids = data.ids || [];
+                if (defaultId && ids.length > 0) {
+                    for (const aid of ids) {
+                        try { await API.addTournamentAthlete(parseInt(defaultId), aid); }
+                        catch (e) { /* ignore */ }
+                    }
+                }
+                await this.renderParticipants();
+                await this.renderTournaments();
+                fileInput.value = '';
+                const msg = `✅ Импортировано: ${data.imported}` + (data.errors ? ` | Ошибок: ${data.errors}` : '');
+                toast(msg, 'success', 5000);
+                if (defaultId && ids.length > 0) toast(`Привязано к соревнованию по умолчанию: ${ids.length}`, 'info', 4000);
+            } catch (e) {
+                toast('Ошибка: ' + e.message, 'error');
+            }
+        });
+    },
+
+setupAthletesImport() {
+        const btn = document.getElementById('import-athletes-btn');
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+            const fileInput = document.getElementById('athletes-import');
+            const file = fileInput.files[0];
+            if (!file) { toast('Выберите файл (Word или Excel)!'); return; }
+
+            const modeRadio = document.querySelector('input[name="import-mode"]:checked');
+            const replaceMode = !!(modeRadio && modeRadio.value === 'replace');
+            if (replaceMode && !confirm('⚠️ Режим «Заменить список»: при импорте ВСЯ текущая информация о спортсменах будет удалена и заменена загружаемым списком. Продолжить?')) return;
+
+            const ext = (file.name.split('.').pop() || '').toLowerCase();
+            const gender = document.getElementById('athletes-import-gender')?.value || 'мужской';
+            // Турнир для привязки: по умолчанию или первый существующий
+            let targetTid = null;
+            const defId = this.getDefaultTournamentId();
+            if (defId) { targetTid = parseInt(defId); }
+            else {
+                try {
+                    const tlist = await API.getTournaments();
+                    if (tlist && tlist.length) targetTid = tlist[0].id;
+                } catch (e) { /* ignore */ }
+            }
+            try {
+                let importedCount = 0, errorCount = 0, ids = [];
+                if (ext === 'docx') {
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    fd.append('gender', gender);
+                    if (replaceMode) fd.append('replace', '1'); // в режиме «дополнить» старый список не трогаем
+                    const res = await fetch('/api/import/docx', { method: 'POST', body: fd });
+                    const data = await res.json();
+                    if (!res.ok || data.error) { toast('❌ ' + (data.error || 'Ошибка импорта'), 'error'); return; }
+                    importedCount = data.imported; errorCount = data.errors || 0; ids = data.ids || [];
+                } else {
+                    // Excel (.xls/.xlsx) — при «замене» очищаем список, затем импортируем
+                    if (replaceMode) {
+                        const clearRes = await fetch('/api/athletes/clear', { method: 'DELETE' });
+                        if (!clearRes.ok) throw new Error('Не удалось очистить список');
+                    }
+                    const r = await this._importExcelRows(file, targetTid);
+                    importedCount = r.imported; errorCount = r.errors || 0;
+                    ids = r.ids || [];
+                }
+                // Привязываем новых бойцов к турниру
+                if (targetTid && ids.length > 0) {
+                    for (const aid of ids) {
+                        try { await API.addTournamentAthlete(targetTid, aid); } catch (e) {}
+                    }
+                }
+                if (this.loadParticipantSelect) await this.loadParticipantSelect();
+                await this.renderParticipants();
+                await this.renderTournaments();
+                fileInput.value = '';
+                let msg = (replaceMode ? '✅ Заменён список: ' : '✅ Дополнено: ') + `${importedCount}` + (errorCount ? ` | Ошибок: ${errorCount}` : '');
+                if (targetTid && ids.length > 0) msg += `\nПривязано к турниру #${targetTid}`;
+                else if (!targetTid) msg += `\nСоревнований нет — турнир не создан, привязка не выполнена`;
+                toast(msg, 'success', 6000);
+            } catch (e) {
+                toast('Ошибка: ' + e.message, 'error');
+            }
+        });
+    },
+
+    // Читает Excel-файл и добавляет бойцов; список уже очищен вызывающей стороной
+    async _importExcelRows(file, tournamentId) {
+        const reader = new FileReader();
+        return new Promise((resolve, reject) => {
+            reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+            reader.onload = async (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+                    let imported = 0, errors = 0;
+                    const addedIds = [];
+                    const existing = await API.getAthletes();
+                    for (const [index, row] of rows.entries()) {
+                        if (index === 0 || !row || row.length < 2) continue;
+                        const name = String(row[0] || '').trim();
+                        const birthYear = parseInt(row[1]);
+                        const weight = parseFloat(String(row[2] || '0').replace(',', '.'));
+                        let gender = 'мужской';
+                        if (row[3]) {
+                            const g = String(row[3]).trim().toLowerCase();
+                            if (g.includes('жен') || g === 'ж' || g === 'female') gender = 'женский';
+                        }
+                        const rank = row[4] ? String(row[4]).trim() : '';
+                        const region = row[5] ? String(row[5]).trim() : '';
+                        const coach = row[6] ? String(row[6]).trim() : '';
+                        if (name && !isNaN(birthYear) && birthYear > 1900 && birthYear < 2020) {
+                            const dup = existing.find(a => a.name.toLowerCase() === name.toLowerCase());
+                            if (dup) {
+                                addedIds.push(dup.id);
+                            } else {
+                                try {
+                                    const athlete = await API.addAthlete({ name, birth_year: birthYear, weight, gender, rank, region, coach });
+                                    imported++;
+                                    existing.push(athlete);
+                                    if (athlete && athlete.id) addedIds.push(athlete.id);
+                                } catch (err) { console.error('Ошибка добавления:', err); errors++; }
+                            }
+                        } else {
+                            errors++;
+                        }
+                    }
+                    // Привязкой занимается вызывающий код (нужен одинаковый флоу для Word и Excel)
+                    resolve({ imported, errors, ids: addedIds });
+                } catch (err) {
+                    reject(err);
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        });
+    },
+
+setupExport() {
         // Этот метод больше не используется
     },
 
@@ -1335,7 +1577,7 @@ const App = {
             const name = document.getElementById('tournament-name').value.trim();
             const dateFrom = document.getElementById('tournament-date-from').value;
             const dateTo = document.getElementById('tournament-date-to').value;
-            const days = parseInt(document.getElementById('tournament-days').value) || 1;
+            const days = parseInt(document.getElementById('tournament-days')?.value) || 1; // счётчик дней закомментирован — по умолчанию 1
 
             if (!name || !dateFrom) {
                 toast('Заполните название и дату!');
@@ -1348,6 +1590,8 @@ const App = {
                 // Новое соревнование становится по умолчанию
                 this.saveDefaultTournament(result.id);
                 await this.renderTournaments();
+                // Обновляем селект турниров во вкладке «Участники»
+                if (this.loadParticipantSelect) await this.loadParticipantSelect();
                 // Показываем сообщение об успешном создании
                 toast('✅ Соревнование создано! Добавь спортсменов через кнопку "👥 Участники"');
             } catch (err) {
@@ -1554,35 +1798,34 @@ const App = {
     },
 
     _pairAndPlaceLottery(athletes) {
-        // Сортируем по весу → по возрасту
+        // Олимпийская система (seeding): сортируем по весу → по возрасту (сильнейшие = нижние номера),
+        // затем расставляем по стандартной турнирной сетке, чтобы 1-й и 2-й сеяные
+        // встречались только в финале, а сильнейшие не пересекались в ранних раундах.
         athletes.sort((a, b) => a.weight - b.weight || a.birth_year - b.birth_year);
 
-        // Жадный паринг: находит лучшую пару (min score), удаляет из пула
-        const pool = [...athletes];
-        const pairs = [];
+        const n = athletes.length;
+        if (n < 2) return [];
 
-        while (pool.length >= 2) {
-            let bestScore = Infinity;
-            let bestI = -1, bestJ = -1;
-
-            for (let i = 0; i < pool.length; i++) {
-                for (let j = i + 1; j < pool.length; j++) {
-                    const s = this._scorePair(pool[i], pool[j]);
-                    if (s < bestScore) {
-                        bestScore = s;
-                        bestI = i;
-                        bestJ = j;
-                    }
-                }
+        function seedOrder(m) {
+            // m — степень двойки; стандартный порядок расстановки сеянных (1 и 2 в разных половинах)
+            if (m <= 2) return [1, 2].slice(0, m);
+            const half = seedOrder(m / 2);
+            const order = [];
+            for (let i = 0; i < half.length; i++) {
+                order.push(half[i]);        // верхняя половина
+                order.push(m + 1 - half[i]); // зеркальная нижняя
             }
-
-            pairs.push([pool[bestI], pool[bestJ]]);
-            // Удаляем по убывающему индексу
-            for (const idx of [bestI, bestJ].sort((a, b) => b - a)) {
-                pool.splice(idx, 1);
-            }
+            return order;
         }
 
+        const size = 1 << Math.ceil(Math.log2(n));       // ближайшая сверху степень двойки
+        const order = seedOrder(size).slice(0, n);        // позиции слотов
+        const slots = order.map(seed => athletes[seed - 1]);
+
+        const pairs = [];
+        for (let i = 0; i + 1 < slots.length; i += 2) {
+            pairs.push([slots[i], slots[i + 1]]);
+        }
         return pairs;
     },
 
@@ -1614,14 +1857,13 @@ const App = {
             return;
         }
 
-        // Группируем по весовым категориям
-        const weightStep = tournament.weight_step || 5.0;
+        // Группируем по весовым категориям (категория = точный вес спортсмена)
         const weightGroups = {};
         tournamentAthletes.forEach(a => {
             if (!a.weight) return;
-            const lower = Math.floor(a.weight / weightStep) * weightStep;
-            const upper = Math.floor(lower + weightStep - 1);
-            const key = `${a.gender} ${Math.floor(lower)}-${upper} кг`;
+            const w = Number(a.weight);
+            const wStr = Number.isInteger(w) ? String(w) : String(w);
+            const key = `${a.gender} ${wStr} кг`;
             weightGroups[key] = weightGroups[key] || [];
             weightGroups[key].push(a);
         });
@@ -1729,13 +1971,12 @@ const App = {
         const athletes = await API.getAthletes();
         const tournamentAthletes = athletes.filter(a => (tournament.athlete_ids || []).includes(a.id));
         
-        const weightStep = tournament.weight_step || 5.0;
         const weightGroups = {};
         tournamentAthletes.forEach(a => {
             if (!a.weight) return;
-            const lower = Math.floor(a.weight / weightStep) * weightStep;
-            const upper = Math.floor(lower + weightStep - 1);
-            const key = `${a.gender} ${Math.floor(lower)}-${upper} кг`;
+            const w = Number(a.weight);
+            const wStr = Number.isInteger(w) ? String(w) : String(w);
+            const key = `${a.gender} ${wStr} кг`;
             weightGroups[key] = weightGroups[key] || [];
             weightGroups[key].push(a);
         });
@@ -1783,15 +2024,14 @@ const App = {
 
         const athletesAll = await API.getAthletes();
 
-        // Показываем только спортсменов той же весовой категории (тот же пол и вес в диапазоне)
-        const wcMatch = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s+([\d.]+)-([\d.]+)\s*кг/);
+        // Показываем только спортсменов того же пола и ТОЧНОГО веса категории
+        const wcMatch = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s+([\d.]+)\s*кг/);
         const wcGender = wcMatch ? wcMatch[1] : null;
-        const wcLow = wcMatch ? parseFloat(wcMatch[2]) : null;
-        const wcHigh = wcMatch ? parseFloat(wcMatch[3]) : null;
+        const wcWeight = wcMatch ? parseFloat(wcMatch[2]) : null;
         let athletes = athletesAll.filter(a => {
             if (wcGender && a.gender !== wcGender) return false;
-            if (wcLow != null && wcHigh != null && a.weight != null) {
-                if (a.weight < wcLow || a.weight > wcHigh) return false;
+            if (wcWeight != null && a.weight != null) {
+                if (Math.abs(Number(a.weight) - wcWeight) > 0.001) return false;
             }
             return true;
         });
@@ -1904,15 +2144,14 @@ const App = {
         const row = button.closest('tr');
         const athletesAll = await API.getAthletes();
 
-        // Показываем только спортсменов той же весовой категории (тот же пол и вес в диапазоне)
-        const wcMatch = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s+([\d.]+)-([\d.]+)\s*кг/);
+        // Показываем только спортсменов того же пола и ТОЧНОГО веса категории
+        const wcMatch = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s+([\d.]+)\s*кг/);
         const wcGender = wcMatch ? wcMatch[1] : null;
-        const wcLow = wcMatch ? parseFloat(wcMatch[2]) : null;
-        const wcHigh = wcMatch ? parseFloat(wcMatch[3]) : null;
+        const wcWeight = wcMatch ? parseFloat(wcMatch[2]) : null;
         let athletes = athletesAll.filter(a => {
             if (wcGender && a.gender !== wcGender) return false;
-            if (wcLow != null && wcHigh != null && a.weight != null) {
-                if (a.weight < wcLow || a.weight > wcHigh) return false;
+            if (wcWeight != null && a.weight != null) {
+                if (Math.abs(Number(a.weight) - wcWeight) > 0.001) return false;
             }
             return true;
         });
@@ -2197,8 +2436,8 @@ const App = {
 
             // Сортируем весовые категории: сначала по полу, потом по весу
             function getWeightLower(wc) {
-                const match = wc.match(/(\d+)-/);
-                return match ? parseInt(match[1]) : 999;
+                const match = wc.match(/(\d+(?:\.\d+)?)/);
+                return match ? parseFloat(match[1]) : 999;
             }
             
             const sortedWeightClasses = Object.keys(lottery).sort((a, b) => {
@@ -2390,8 +2629,9 @@ const App = {
                     });
                 });
 
-                // Бронзовый бой за 3-е/4-е место (проигравшие полуфиналов) — в день финала
-                if (maxRounds >= 2 && rounds.length >= 2) {
+                // Бронзовый бой за 3-е/4-е место ОТКЛЮЧЁН — бронзу получают оба полуфиналиста.
+                // (Блок оставлен закомментированным на случай, если решите вернуть его обратно.)
+                /* if (maxRounds >= 2 && rounds.length >= 2) {
                     const semi = rounds[rounds.length - 2];
                     const finals = rounds[rounds.length - 1];
                     if (semi.length === 2 && semi.every(f => f.result && f.a2 !== null) && finals.length === 1) {
@@ -2437,7 +2677,6 @@ const App = {
                                     ${bbuttons}
                                     ${bmethod}
                                 </div>`;
-                            // Ячейка победителя бронзового боя (3-4 места) — внизу слота
                             if (bw != null) {
                                 const bwin = (bw === fb) ? bn1 : bn2;
                                 daysMap[bDay].cat[weightClass].cols[bKey] +=
@@ -2445,7 +2684,7 @@ const App = {
                             }
                         }
                     }
-                }
+                } */
             }
 
             // Закрываем колонки раундов и приводим к отсортированному по раунду массиву
@@ -3084,8 +3323,8 @@ async advanceWinner(tournamentId, fight, winnerId) {
         }
 
         function getWeightLower(wc) {
-            const m = wc.match(/(\d+)-/);
-            return m ? parseInt(m[1]) : 999;
+            const m = wc.match(/(\d+(?:\.\d+)?)/);
+            return m ? parseFloat(m[1]) : 999;
         }
         const sortedWeightClasses = Object.keys(lottery).sort((a, b) => {
             const gA = a.split(' ')[0], gB = b.split(' ')[0];
@@ -3162,8 +3401,9 @@ async advanceWinner(tournamentId, fight, winnerId) {
             hasResults = true;
             const gold = idName[champion] ? { name: idName[champion].name, id: champion } : null;
 
-            // Серебро — проигравший финала, бронза — проигравшие полуфинала
-            let silver = null, bronze = null;
+            // Серебро — проигравший финала; бронза — ОБА проигравших полуфинала (две бронзы)
+            let silver = null;
+            const bronzes = [];   // два бронзовых призёра
             const finalRound = rounds[rounds.length - 1];
             if (finalRound.length === 1 && finalRound[0].a2 !== null) {
                 const finalPair = finalRound[0];
@@ -3178,40 +3418,11 @@ async advanceWinner(tournamentId, fight, winnerId) {
                     const la = fid(sp.a1), lb = fid(sp.a2);
                     const loserId = (sp.result.winner_id === la) ? lb : la;
                     if (loserId != null && idName[loserId] && loserId !== champion) {
-                        if (!bronze) {
-                            bronze = { name: idName[loserId].name, id: loserId };
-                        } else {
-                            break;
+                        if (bronzes.length < 2) {
+                            bronzes.push({ name: idName[loserId].name, id: loserId });
                         }
                     }
                 }
-            }
-
-            // Бронзовый бой за 3-е/4-е место (проигравшие полуфиналов)
-            const bronzeRes = resultsMap[`${wc}|9000`] || null;
-            let fourth = null;
-            let semiLosers = null;
-            if (maxRounds >= 2 && rounds.length >= 2) {
-                const semi = rounds[rounds.length - 2];
-                if (semi.length === 2 && semi.every(f => f.result && f.a2 !== null)) {
-                    semiLosers = semi.map(f => {
-                        const la = fid(f.a1), lb = fid(f.a2);
-                        return (f.result.winner_id === la) ? lb : la;
-                    });
-                }
-            }
-            if (bronzeRes && bronzeRes.winner_id) {
-                const b = idName[bronzeRes.winner_id];
-                if (b) bronze = { name: b.name, id: bronzeRes.winner_id };
-                // 4-е место — другой проигравший полуфинала
-                if (semiLosers) {
-                    const fourthId = (semiLosers[0] === bronzeRes.winner_id) ? semiLosers[1] : semiLosers[0];
-                    if (fourthId != null && idName[fourthId]) fourth = { name: idName[fourthId].name, id: fourthId };
-                }
-            } else if (semiLosers) {
-                // Если бронзовый бой не сыгран — показываем хотя бы одного полуфиналиста
-                const b = idName[semiLosers[0]];
-                if (b) bronze = { name: b.name, id: semiLosers[0] };
             }
 
             // День финала
@@ -3237,22 +3448,15 @@ async advanceWinner(tournamentId, fight, winnerId) {
                     </div>
                 </div>`;
             }
-            if (bronze) {
+            // Две бронзы — оба проигравших полуфиналиста
+            bronzes.forEach(b => {
                 html += `<div class="result-card" ${medalStyle('#cd7f32', 'rgba(205,127,50,0.08)')}>
                     <div class="result-fighters" style="justify-content:center; gap:16px;">
                         <span style="font-size:1.6em;">🥉</span>
-                        <span style="font-size:1.15em; font-weight:600; color:#cd7f32;">${this.escapeHtml(bronze.name)}</span>
+                        <span style="font-size:1.15em; font-weight:600; color:#cd7f32;">${this.escapeHtml(b.name)}</span>
                     </div>
                 </div>`;
-            }
-            if (fourth) {
-                html += `<div class="result-card" style="border-color:rgba(255,255,255,0.15); background:rgba(255,255,255,0.03);">
-                    <div class="result-fighters" style="justify-content:center; gap:16px;">
-                        <span style="font-size:1.3em; font-weight:700; color:#e0e0e0;">4</span>
-                        <span style="font-size:1.05em; font-weight:600; color:#ccc;">${this.escapeHtml(fourth.name)}</span>
-                    </div>
-                </div>`;
-            }
+            });
 
             html += '</div>';
         }

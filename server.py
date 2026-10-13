@@ -19,6 +19,7 @@ import collections
 import json
 import logging
 import math
+import os
 import random
 import secrets
 import shutil
@@ -35,7 +36,44 @@ from flask_cors import CORS
 
 from database import get_db, init_db
 
-app = Flask(__name__, static_folder='.')
+# ======================== ПУТИ (обычный запуск / заморозка PyInstaller) ========================
+# В собранном .exe ресурсы (index.html и др.) лежат во временной папке _MEIPASS,
+# а данные (boxing.db, бэкапы) — в отдельной папке пользователя %APPDATA%\BoxingApp.
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = getattr(sys, '_MEIPASS', PROJECT_DIR)
+
+
+def _get_data_dir():
+    if getattr(sys, 'frozen', False):
+        # Портативный режим: если рядом с exe (или внутри bundle) есть файл portable.flag —
+        # данные храним в папке exe. Иначе — в %APPDATA%\BoxingApp.
+        exe_dir = os.path.dirname(sys.executable)
+        bundled = getattr(sys, '_MEIPASS', exe_dir)
+        if os.path.exists(os.path.join(bundled, 'portable.flag')) or os.path.exists(os.path.join(exe_dir, 'portable.flag')):
+            return exe_dir
+        base = os.environ.get('BOXING_DATA_DIR') or \
+               os.path.join(os.environ.get('APPDATA') or os.path.expanduser('~'), 'BoxingApp')
+        os.makedirs(base, exist_ok=True)
+        return base
+    return PROJECT_DIR
+
+
+DATA_DIR = _get_data_dir()
+
+
+def _db_path():
+    return os.path.join(DATA_DIR, 'boxing.db')
+
+
+def _local_version_path():
+    return os.path.join(DATA_DIR, LOCAL_VERSION_FILE)
+
+
+def _backup_dir():
+    return os.path.join(DATA_DIR, 'backups')
+
+
+app = Flask(__name__, static_folder=ASSETS_DIR)
 CORS(app)
 
 # ======================== АВТОРИЗАЦИЯ ========================
@@ -95,7 +133,7 @@ def _fetch_url(url, timeout=25):
 
 def _read_local_version():
     try:
-        with open(LOCAL_VERSION_FILE, 'r', encoding='utf-8') as f:
+        with open(_local_version_path(), 'r', encoding='utf-8') as f:
             return f.read().strip()
     except Exception:
         return ''
@@ -103,7 +141,7 @@ def _read_local_version():
 
 def _write_local_version(v):
     try:
-        with open(LOCAL_VERSION_FILE, 'w', encoding='utf-8') as f:
+        with open(_local_version_path(), 'w', encoding='utf-8') as f:
             f.write(str(v).strip())
     except Exception:
         pass
@@ -131,7 +169,7 @@ def login_page():
     """Страница входа."""
     if session.get('authenticated'):
         return redirect('/')
-    return send_from_directory('.', 'login.html')
+    return send_from_directory(ASSETS_DIR, 'login.html')
 
 
 @app.route('/login', methods=['POST'])
@@ -212,13 +250,13 @@ def backup_db(force=False):
     if not force and (now - _last_backup_time < BACKUP_INTERVAL_SECONDS):
         return None
 
-    db_path = Path(DB_FILE)
+    db_path = Path(_db_path())
     if not db_path.exists():
         return None
 
     try:
-        backup_path = Path(BACKUP_DIR)
-        backup_path.mkdir(exist_ok=True)
+        backup_path = Path(_backup_dir())
+        backup_path.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         target = backup_path / f'boxing_{stamp}.db'
         shutil.copy2(db_path, target)
@@ -246,11 +284,10 @@ def rows_to_list(rows):
 
 
 def format_weight_class(gender, weight, step):
-    """Форматирует строку весовой категории (целые числа в границах)."""
-    lower = int(weight / step) * step
-    upper = int(lower + step - 1)
-    lower_str = f"{int(lower)}" if lower == int(lower) else f"{lower}"
-    return f"{gender} {lower_str}-{upper} кг"
+    """Форматирует строку весовой категории по точному весу спортсмена."""
+    w = float(weight)
+    w_str = f"{int(w)}" if w == int(w) else f"{w:g}"
+    return f"{gender} {w_str} кг"
 
 
 def rows_to_list(rows):
@@ -377,6 +414,22 @@ def delete_athlete(athlete_id):
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+
+@app.route('/api/athletes/clear', methods=['DELETE'])
+def clear_athletes():
+    """Полностью очистить список спортсменов и связанные данные."""
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM tournament_athletes")
+        conn.execute("DELETE FROM bracket_results")
+        conn.execute("DELETE FROM lottery")
+        conn.execute("DELETE FROM fights")
+        conn.execute("DELETE FROM athletes")
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({'success': True, 'deleted': True})
 
 
 # ======================== API: СОРЕВНОВАНРРЇ ========================
@@ -728,13 +781,11 @@ def compute_weight_classes(weight_step, athlete_ids=None):
     for a in athletes:
         if a['weight'] is None:
             continue
-        lower = int(a['weight'] / step) * step
-        upper = int(lower + step - 1)
-        categories.add(f"{a['gender']} {int(lower)}-{upper} кг")
+        categories.add(format_weight_class(a['gender'], a['weight'], step))
 
     def sort_key(cat):
         gender_part, weight_part = cat.split(' ', 1)
-        lower = float(weight_part.split('-')[0])
+        lower = float(weight_part.replace(' кг', ''))
         return (gender_part, lower)
 
     return sorted(categories, key=sort_key)
@@ -816,8 +867,6 @@ def generate_bracket(tournament_id):
     weight_groups = {}
 
     for a in athletes:
-        lower = int(a['weight'] / weight_step) * weight_step
-        upper = lower + weight_step - 0.1
         key = format_weight_class(a['gender'], a['weight'], weight_step)
         if selected is not None and key not in selected:
             continue
@@ -1261,19 +1310,171 @@ def update_apply():
 
 
 
+# ======================== API: ИМПОРТ ИЗ WORD (.docx) ========================
+
+def _docx_cell_text(tc, W):
+    """Собирает текст ячейки таблицы Word."""
+    parts = []
+    for t in tc.iter(W + 't'):
+        parts.append(t.text or '')
+    return ''.join(parts).strip()
+
+
+def parse_docx_tables(file_bytes):
+    """Возвращает список таблиц из .docx как списки списков строк."""
+    from io import BytesIO
+    from zipfile import ZipFile
+    from xml.etree import ElementTree as ET
+    W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    z = ZipFile(BytesIO(file_bytes))
+    xml = z.read('word/document.xml').decode('utf-8', 'replace')
+    root = ET.fromstring(xml)
+    tables = []
+    for tbl in root.iter(W + 'tbl'):
+        rows = []
+        for tr in tbl.iter(W + 'tr'):
+            cells = [_docx_cell_text(tc, W) for tc in tr.findall(W + 'tc')]
+            rows.append(cells)
+        if rows:
+            tables.append(rows)
+    return tables
+
+
+def _norm_header(s):
+    """Нормализуем заголовок: нижний регистр, убираем подчёркивания."""
+    return (s or '').strip().lower().replace('_', ' ')
+
+
+def _find_col(colmap, *keys):
+    for k in keys:
+        if k in colmap:
+            return colmap[k]
+    return None
+
+
+def _extract_weight(s):
+    """Из 'Весовая категория' берём первое число: '-36' -> 36, '55-59.9' -> 55."""
+    import re
+    m = re.search(r'(\d+(?:[.,]\d+)?)', str(s or ''))
+    return float(m.group(1).replace(',', '.')) if m else None
+
+
+@app.route('/api/import/docx', methods=['POST'])
+def import_docx():
+    """Импорт бойцов из таблицы Word-файла.
+
+    Сопоставление по названию столбцов: ФИО, Весовая категория, Тренер.
+    Остальное (пол, год, разряд, регион) — необязательно / по умолчанию.
+    """
+    upload = request.files.get('file')
+    if upload is None or not upload.filename:
+        return jsonify({'error': 'Файл не передан'}), 400
+
+    default_gender = (request.form.get('gender') or 'мужской').strip()
+    if default_gender not in ('мужской', 'женский'):
+        default_gender = 'мужской'
+
+    # Если установлен флаг replace — полностью очищаем текущий список спортсменов
+    # (в т.ч. «родных»), чтобы остался только импортируемый состав.
+    if request.form.get('replace', '0') == '1':
+        conn = get_db()
+        try:
+            conn.execute("DELETE FROM tournament_athletes")
+            conn.execute("DELETE FROM bracket_results")
+            conn.execute("DELETE FROM lottery")
+            conn.execute("DELETE FROM fights")
+            conn.execute("DELETE FROM athletes")
+            conn.commit()
+        finally:
+            conn.close()
+
+    try:
+        tables = parse_docx_tables(upload.read())
+    except Exception as e:
+        return jsonify({'error': f'Не удалось прочитать Word-файл: {e}'}), 400
+
+    # Имена уже присутствующих спортсменов — чтобы не плодить дубли при «дополнении»
+    try:
+        conn0 = get_db()
+        existing_names = {r[0].lower() for r in conn0.execute("SELECT name FROM athletes")}
+        conn0.close()
+    except Exception:
+        existing_names = set()
+
+    imported = []
+    errors = []
+    new_ids = []
+    for table in tables:
+        if not table:
+            continue
+        # Ищем строку-заголовок (содержит ключевые слова или №)
+        header_row = None
+        for idx, row in enumerate(table):
+            joined = ' '.join(_norm_header(c) for c in row)
+            if any(k in joined for k in ('фио', 'фамилия', 'имя', 'спортсмен')) or 'вес' in joined or '№' in joined:
+                header_row = idx
+                break
+        if header_row is None:
+            continue
+        colmap = {}
+        header = table[header_row]
+        for ci, h in enumerate(header):
+            if _norm_header(h):
+                colmap[_norm_header(h)] = ci
+        ci_name = _find_col(colmap, 'фио', 'ф.и.о', 'имя', 'фамилия', 'имя спортсмена', 'спортсмен')
+        ci_weight = _find_col(colmap, 'вес', 'весовая категория, кг', 'весовая категория', 'категория', 'вес, кг', 'вес кг')
+        ci_coach = _find_col(colmap, 'тренер', 'тренер-преподаватель', 'физрук')
+        if ci_name is None:
+            continue
+
+        for row in table[header_row + 1:]:
+            if ci_name >= len(row):
+                continue
+            name = (row[ci_name] or '').strip()
+            if not name:
+                continue
+            weight = _extract_weight(row[ci_weight]) if ci_weight is not None and ci_weight < len(row) else None
+            coach = (row[ci_coach] if ci_coach is not None and ci_coach < len(row) else '') or ''
+
+            # Дубликат по имени — пропускаем (и в режиме «заменить», и в «дополнить»)
+            if name.lower() in existing_names:
+                continue
+            existing_names.add(name.lower())
+
+            conn = get_db()
+            try:
+                cur = conn.execute(
+                    '''INSERT INTO athletes (name, birth_year, weight, gender, rank, region, coach)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                    (name, 0, weight if weight is not None else 0.0, default_gender, '', '', coach)
+                )
+                conn.commit()
+                new_ids.append(cur.lastrowid)
+                imported.append({'name': name, 'weight': weight})
+            except Exception as e:
+                errors.append(f'{name}: {e}')
+            finally:
+                conn.close()
+
+    if not imported and not errors:
+        return jsonify({'error': 'Не найдено строк для импорта (проверьте, что в таблице есть столбцы ФИО/имя и заголовки)'}), 400
+
+    return jsonify({'imported': len(imported), 'errors': len(errors), 'ids': new_ids, 'errorlist': errors[:20]})
+
+
 # ======================== СТАТИЧЕСКИЕ ФАЙЛЫ ========================
 
 @app.route('/')
 def index():
     """Главная страница."""
-    return send_from_directory('.', 'index.html')
+    return send_from_directory(ASSETS_DIR, 'index.html')
 
 @app.route('/<path:path>')
 def static_files(path):
     """Отдача статических файлов (JS, CSS Рё С‚.Рґ.)."""
     if path.endswith('.js'):
-        return send_from_directory('.', path, mimetype='application/javascript')
-    return send_from_directory('.', path)
+        return send_from_directory(ASSETS_DIR, path, mimetype='application/javascript')
+    return send_from_directory(ASSETS_DIR, path)
 
 
 # ======================== ЗАПУСК ========================
@@ -1301,23 +1502,38 @@ def open_browser(port):
     webbrowser.open(f'http://localhost:{port}')
 
 
-if __name__ == '__main__':
-    # Инициализация БД
+def run_server(host='0.0.0.0', open_browser_on_start=True):
+    """Инициализирует БД, готовит каталог данных и запускает Flask.
+
+    Возвращает порт, на котором поднят сервер. Используется и в консольном
+    варианте, и в GUI-оболочке (собранный .exe).
+    """
+    import database
+    database.DB_PATH = Path(_db_path())
     init_db()
-
-    # Резервная копия БД при старте
     backup_db(force=True)
-
     port = find_free_port()
 
+    def _serve():
+        app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
+
+    t = threading.Thread(target=_serve, daemon=True)
+    t.start()
+    if open_browser_on_start:
+        threading.Thread(target=open_browser, args=(port,), daemon=True).start()
+    return port
+
+
+if __name__ == '__main__':
+    port = run_server()
     print('=' * 60)
-    print('  >> СОРЕВНОВАНРЯ ПО БОКСУ (SQLite + Flask)')
+    print('  >> СОРЕВНОВАНИЯ ПО БОКСУ (SQLite + Flask)')
     print('=' * 60)
     print(f'\n  Сервер запущен: http://localhost:{port}')
     print('  Нажмите Ctrl+C для остановки\n')
-
-    # Открываем браузер
-    t = threading.Thread(target=open_browser, args=(port,), daemon=True)
-    t.start()
-
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    # ждём завершения (поток сервера — daemon)
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
