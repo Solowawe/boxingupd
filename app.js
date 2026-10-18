@@ -237,7 +237,7 @@ const App = {
                 return;
             }
             if (res.up_to_date) {
-                if (statusEl) statusEl.textContent = `Актуальная версия ${res.local_version} от ${res.owner}/${res.repo}`;
+                if (statusEl) statusEl.textContent = `Актуальная версия ${res.local_version}`;
                 toast('Обновлений нет. Текущая версия: ' + (res.local_version || '—'), 'success');
                 return;
             }
@@ -245,7 +245,7 @@ const App = {
             const r = await fetch('/api/update/apply', { method: 'POST' }).then(x => x.json());
             if (r.ok) {
                 if (statusEl) statusEl.textContent = `Обновлено до ${r.version}`;
-                toast('✅ Обновлено: ' + (r.updated || []).join(', ') + '. Обновите страницу (F5). Если обновлялся backend — перезапустите сервер.', 'success', 6000);
+                toast('✅ Приложение успешно обновлено. Обновите страницу (F5). Если обновлялся backend — перезапустите сервер.', 'success', 6000);
             } else {
                 if (statusEl) statusEl.textContent = 'Ошибка: ' + r.error;
                 toast('Ошибка обновления: ' + r.error, 'error');
