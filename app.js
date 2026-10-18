@@ -1373,20 +1373,56 @@ setupAthletesImport() {
                     let imported = 0, errors = 0;
                     const addedIds = [];
                     const existing = await API.getAthletes();
-                    for (const [index, row] of rows.entries()) {
-                        if (index === 0 || !row || row.length < 2) continue;
-                        const name = String(row[0] || '').trim();
-                        const birthYear = parseInt(row[1]);
-                        const weight = parseFloat(String(row[2] || '0').replace(',', '.'));
-                        let gender = 'мужской';
-                        if (row[3]) {
-                            const g = String(row[3]).trim().toLowerCase();
-                            if (g.includes('жен') || g === 'ж' || g === 'female') gender = 'женский';
+
+                    // --- Умное сопоставление колонок по заголовкам ---
+                    const norm = s => String(s || '').toLowerCase().trim();
+                    function pickCol(headerRow, ...keys) {
+                        for (let i = 0; i < headerRow.length; i++) {
+                            const t = norm(headerRow[i]);
+                            if (t && keys.some(k => t.includes(k))) return i;
                         }
-                        const rank = row[4] ? String(row[4]).trim() : '';
-                        const region = row[5] ? String(row[5]).trim() : '';
-                        const coach = row[6] ? String(row[6]).trim() : '';
-                        if (name && !isNaN(birthYear) && birthYear > 1900 && birthYear < 2020) {
+                        return -1;
+                    }
+                    let headerIdx = -1;
+                    for (let i = 0; i < rows.length; i++) {
+                        const joined = (rows[i] || []).map(norm).join(' ');
+                        if (/фио|ф\.и\.о|имя|фамилия|вес|год|тренер/.test(joined)) { headerIdx = i; break; }
+                    }
+                    let ci; // поле -> индекс колонки
+                    if (headerIdx >= 0) {
+                        const h = rows[headerIdx] || [];
+                        ci = {
+                            name:   pickCol(h, 'фио', 'ф.и.о', 'имя', 'фамилия', 'спортсмен'),
+                            birth:  pickCol(h, 'год рождения', 'год рожд', 'дата рождения', 'год'),
+                            weight: pickCol(h, 'вес'),
+                            gender: pickCol(h, 'пол'),
+                            rank:   pickCol(h, 'разряд', 'квалификация'),
+                            region: pickCol(h, 'регион', 'субъект', 'город'),
+                            coach:  pickCol(h, 'тренер', 'физрук')
+                        };
+                    } else {
+                        ci = { name:0, birth:1, weight:2, gender:3, rank:4, region:5, coach:6 };
+                        headerIdx = -1;
+                    }
+                    const dataStart = headerIdx >= 0 ? headerIdx + 1 : 0;
+                    const cell = (row, c) => (c >= 0 && row[c] != null) ? String(row[c]).trim() : '';
+                    const yearOf = s => { const m = String(s || '').match(/(19|20)\d{2}/); return m ? parseInt(m[0]) : NaN; };
+                    const weightOf = s => parseFloat(String(s || '').replace(',', '.').replace(/[^\d.]/g, ''));
+
+                    for (let index = dataStart; index < rows.length; index++) {
+                        const row = rows[index];
+                        if (!row) continue;
+                        const name = cell(row, ci.name);
+                        if (!name) continue;
+                        const birthYear = yearOf(cell(row, ci.birth));
+                        const weight = weightOf(cell(row, ci.weight)) || 0;
+                        let gender = 'мужской';
+                        const gv = norm(cell(row, ci.gender));
+                        if (gv.includes('жен') || gv === 'ж' || gv === 'female') gender = 'женский';
+                        const rank = cell(row, ci.rank);
+                        const region = cell(row, ci.region);
+                        const coach = cell(row, ci.coach);
+                        if (!isNaN(birthYear) && birthYear > 1900 && birthYear < 2020) {
                             const dup = existing.find(a => a.name.toLowerCase() === name.toLowerCase());
                             if (dup) {
                                 addedIds.push(dup.id);

@@ -1320,8 +1320,28 @@ def _docx_cell_text(tc, W):
     return ''.join(parts).strip()
 
 
+def _docx_cell_yellow(tc, W):
+    """True, если ячейка подсвечена жёлтым (shading FFFFxx или highlight yellow)."""
+    try:
+        shd = tc.find('.//' + W + 'shd')
+        if shd is not None:
+            fill = (shd.get(W + 'fill') or '').upper()
+            if fill.startswith('FFFF') or fill in ('FFF2CC', 'FFE699', 'FFD966'):
+                return True
+        for hl in tc.iter(W + 'highlight'):
+            if (hl.get(W + 'val') or '').lower() in ('yellow',):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def parse_docx_tables(file_bytes):
-    """Возвращает список таблиц из .docx как списки списков строк."""
+    """Возвращает список таблиц из .docx.
+
+    Каждая таблица — список строк; каждая строка — список ячеек-словарей:
+        {'t': текст, 'y': подсвечена ли жёлтым}.
+    """
     from io import BytesIO
     from zipfile import ZipFile
     from xml.etree import ElementTree as ET
@@ -1333,7 +1353,8 @@ def parse_docx_tables(file_bytes):
     for tbl in root.iter(W + 'tbl'):
         rows = []
         for tr in tbl.iter(W + 'tr'):
-            cells = [_docx_cell_text(tc, W) for tc in tr.findall(W + 'tc')]
+            cells = [{'t': _docx_cell_text(tc, W), 'y': _docx_cell_yellow(tc, W)}
+                     for tc in tr.findall(W + 'tc')]
             rows.append(cells)
         if rows:
             tables.append(rows)
@@ -1357,6 +1378,29 @@ def _extract_weight(s):
     import re
     m = re.search(r'(\d+(?:[.,]\d+)?)', str(s or ''))
     return float(m.group(1).replace(',', '.')) if m else None
+
+
+def _extract_year(s):
+    """Из даты/строки '02.07.2015' берём год (2015)."""
+    import re
+    m = re.search(r'(19|20)\d{2}', str(s or ''))
+    return int(m.group(0)) if m else 0
+
+
+def _pick_col(header, *keys):
+    """Выбирает индекс столбца по ключевым словам в заголовке.
+
+    Приоритет — столбцы, подсвеченные жёлтым (header[i]['y']); если их нет —
+    любой подходящий по тексту заголовка.
+    """
+    n = len(header)
+    def htext(i):
+        return _norm_header(header[i]['t'])
+    cands = [i for i in range(n) if any(k in htext(i) for k in keys)]
+    if not cands:
+        return None
+    yellow = [i for i in cands if header[i].get('y')]
+    return (yellow or cands)[0]
 
 
 @app.route('/api/import/docx', methods=['POST'])
@@ -1410,31 +1454,40 @@ def import_docx():
         # Ищем строку-заголовок (содержит ключевые слова или №)
         header_row = None
         for idx, row in enumerate(table):
-            joined = ' '.join(_norm_header(c) for c in row)
+            joined = ' '.join(_norm_header(c['t']) for c in row)
             if any(k in joined for k in ('фио', 'фамилия', 'имя', 'спортсмен')) or 'вес' in joined or '№' in joined:
                 header_row = idx
                 break
         if header_row is None:
             continue
-        colmap = {}
         header = table[header_row]
-        for ci, h in enumerate(header):
-            if _norm_header(h):
-                colmap[_norm_header(h)] = ci
-        ci_name = _find_col(colmap, 'фио', 'ф.и.о', 'имя', 'фамилия', 'имя спортсмена', 'спортсмен')
-        ci_weight = _find_col(colmap, 'вес', 'весовая категория, кг', 'весовая категория', 'категория', 'вес, кг', 'вес кг')
-        ci_coach = _find_col(colmap, 'тренер', 'тренер-преподаватель', 'физрук')
+        if not header:
+            continue
+
+        # Умное сопоставление полей по заголовкам (с приоритетом жёлтых столбцов)
+        ci_name = _pick_col(header, 'фио', 'ф.и.о', 'имя', 'фамилия', 'спортсмен')
+        ci_birth = _pick_col(header, 'год рождения', 'год рожд', 'дата рождения')
+        ci_weight = _pick_col(header, 'вес', 'весовая категория', 'категория', 'вес, кг')
+        ci_rank = _pick_col(header, 'разряд', 'квалификация')
+        ci_coach = _pick_col(header, 'тренер', 'физрук')
+        ci_region = _pick_col(header, 'субъект', 'город', 'регион')
         if ci_name is None:
             continue
+
+        def cell(row, ci):
+            return row[ci].get('t', '') if ci is not None and ci < len(row) else ''
 
         for row in table[header_row + 1:]:
             if ci_name >= len(row):
                 continue
-            name = (row[ci_name] or '').strip()
+            name = cell(row, ci_name).strip()
             if not name:
                 continue
-            weight = _extract_weight(row[ci_weight]) if ci_weight is not None and ci_weight < len(row) else None
-            coach = (row[ci_coach] if ci_coach is not None and ci_coach < len(row) else '') or ''
+            weight = _extract_weight(cell(row, ci_weight)) if ci_weight is not None else None
+            birth_year = _extract_year(cell(row, ci_birth)) if ci_birth is not None else 0
+            rank = cell(row, ci_rank).strip()
+            region = cell(row, ci_region).strip()
+            coach = cell(row, ci_coach).strip()
 
             # Дубликат по имени — пропускаем (и в режиме «заменить», и в «дополнить»)
             if name.lower() in existing_names:
@@ -1446,7 +1499,7 @@ def import_docx():
                 cur = conn.execute(
                     '''INSERT INTO athletes (name, birth_year, weight, gender, rank, region, coach)
                        VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                    (name, 0, weight if weight is not None else 0.0, default_gender, '', '', coach)
+                    (name, birth_year, weight if weight is not None else 0.0, default_gender, rank, region, coach)
                 )
                 conn.commit()
                 new_ids.append(cur.lastrowid)
