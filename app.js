@@ -256,8 +256,95 @@ const App = {
         }
     },
 
+    openInfo(title, body) {
+        const m = document.getElementById('info-modal');
+        if (!m) return;
+        document.getElementById('info-modal-title').textContent = title || 'Справка';
+        document.getElementById('info-modal-body').textContent = body || '';
+        m.style.display = 'block';
+    },
+    closeInfo() {
+        const m = document.getElementById('info-modal');
+        if (m) m.style.display = 'none';
+    },
+    openTerms() {
+        this.openInfo('Пользовательское соглашение',
+`ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ
+
+Настоящее соглашение определяет условия использования программы «Соревнования по боксу».
+
+1. ДАННЫЕ ПОЛЬЗОВАТЕЛЯ
+1.1. Все данные, вводимые пользователем (спортсмены, соревнования, результаты), хранятся локально на устройстве пользователя и не передаются третьим лицам.
+
+2. ОТВЕТСТВЕННОСТЬ
+2.1. Программа предоставляется «как есть». Правообладатель не несёт ответственности за прямой или косвенный ущерб, возникший в результате использования или невозможности использования программы.
+2.2. Пользователь самостоятельно проверяет корректность вводимых данных и итоговых результатов.
+
+3. ЗАКЛЮЧИТЕЛЬНЫЕ ПОЛОЖЕНИЯ
+3.1. Используя программу, вы подтверждаете согласие с настоящим соглашением.
+3.2. По вопросам соглашения обращайтесь к правообладателю.`);
+    },
+
+    openLicense() {
+        this.openInfo('Лицензионное соглашение',
+`ПРОГРАММНОЕ ОБЕСПЕЧЕНИЕ «СОРЕВНОВАНИЯ ПО БОКСУ»
+
+Настоящее лицензионное соглашение (далее — Соглашение) регулирует порядок использования программы для ЭВМ «Соревнования по боксу» (далее — Программа).
+
+1. ПРЕДМЕТ СОГЛАШЕНИЯ
+1.1. Правообладатель предоставляет вам неисключительную лицензию на использование Программы в личных (некоммерческих) и профессиональных целях: ведение списка спортсменов, соревнований, жеребьёвки, турнирных сеток и результатов.
+
+2. УСТАНАВЛИВАЕМЫЕ ГРАНИЦЫ ИСПОЛЬЗОВАНИЯ
+2.1. Разрешается: устанавливать и запускать Программу на любом количестве устройств; копировать и распространять Программу без изменений; использовать сгенерированные данные в своей деятельности.
+2.2. Запрещается: модифицировать, декомпилировать или извлекать исходный код без отдельного разрешения правообладателя; использовать Программу для незаконной деятельности.
+
+3. ДАННЫЕ ПОЛЬЗОВАТЕЛЯ
+3.1. Все данные, введённые пользователем (спортсмены, соревнования, результаты), хранятся локально на устройстве пользователя и не передаются третьим лицам.
+
+4. ОГРАНИЧЕНИЕ ОТВЕТСТВЕННОСТИ
+4.1. Программа предоставляется «как есть». Правообладатель не несёт ответственности за прямой или косвенный ущерб, возникший в результате использования или невозможности использования Программы.
+4.2. Пользователь самостоятельно проверяет корректность вводимых данных и итоговых результатов.
+
+5. ЗАКЛЮЧИТЕЛЬНЫЕ ПОЛОЖЕНИЯ
+5.1. Используя Программу, вы подтверждаете согласие с условиями настоящего Соглашения.
+5.2. По вопросам Соглашения обращайтесь к правообладателю.`);
+    },
+async openAbout() {
+        let version = '—';
+        try {
+            const r = await fetch('/update-manifest.json', { cache: 'no-store' });
+            if (r.ok) {
+                const man = await r.json();
+                if (man && man.version) version = man.version;
+            }
+        } catch (e) { /* игнорируем */ }
+        this.openInfo('О приложении',
+`СОРЕВНОВАНИЯ ПО БОКСУ
+
+Программа для организации соревнований по боксу.
+
+Возможности:
+• Ведение списка спортсменов и весовых категорий
+• Импорт участников из Word и Excel (умное сопоставление полей)
+• Создание соревнований и расписания по дням
+• Жеребьёвка по олимпийской системе
+• Турнирная сетка с бронзовыми местами
+• Результаты и протоколы, экспорт в Excel и печать
+
+Версия: ${version}
+© 2026. Все данные хранятся локально.
+По всем вопросам обращаться на почту: liteapps08@ya.ru`);
+    },
+
     async init() {
         this.setupTabs();
+        // Закрытие окна «Справка» кликом по фону
+        const infoModal = document.getElementById('info-modal');
+        if (infoModal) {
+            infoModal.addEventListener('click', (e) => {
+                if (e.target === infoModal) infoModal.style.display = 'none';
+            });
+        }
         this.setupExcelImport();
         this.setupWordImport();
         this.setupAthletesImport();
@@ -1307,6 +1394,10 @@ setupAthletesImport() {
 
             const ext = (file.name.split('.').pop() || '').toLowerCase();
             const gender = document.getElementById('athletes-import-gender')?.value || 'мужской';
+            const statusEl = document.getElementById('import-status');
+            const runBtn = document.getElementById('import-athletes-btn');
+            if (statusEl) statusEl.textContent = '⏳ Загрузка…';
+            if (runBtn) runBtn.disabled = true;
             // Турнир для привязки: по умолчанию или первый существующий
             let targetTid = null;
             const defId = this.getDefaultTournamentId();
@@ -1318,7 +1409,7 @@ setupAthletesImport() {
                 } catch (e) { /* ignore */ }
             }
             try {
-                let importedCount = 0, errorCount = 0, ids = [];
+                let importedCount = 0, errorCount = 0, skippedCount = 0, ids = [];
                 if (ext === 'docx') {
                     const fd = new FormData();
                     fd.append('file', file);
@@ -1326,8 +1417,13 @@ setupAthletesImport() {
                     if (replaceMode) fd.append('replace', '1'); // в режиме «дополнить» старый список не трогаем
                     const res = await fetch('/api/import/docx', { method: 'POST', body: fd });
                     const data = await res.json();
-                    if (!res.ok || data.error) { toast('❌ ' + (data.error || 'Ошибка импорта'), 'error'); return; }
-                    importedCount = data.imported; errorCount = data.errors || 0; ids = data.ids || [];
+                    if (!res.ok || data.error) {
+                        if (statusEl) statusEl.innerHTML = '❌ Ошибка загрузки: ' + (data.error || 'Ошибка импорта');
+                        toast('Ошибка загрузки: ' + (data.error || 'Ошибка импорта'), 'error');
+                        if (runBtn) runBtn.disabled = false;
+                        return;
+                    }
+                    importedCount = data.imported; errorCount = data.errors || 0; skippedCount = data.skipped || 0; ids = data.ids || [];
                 } else {
                     // Excel (.xls/.xlsx) — при «замене» очищаем список, затем импортируем
                     if (replaceMode) {
@@ -1335,7 +1431,7 @@ setupAthletesImport() {
                         if (!clearRes.ok) throw new Error('Не удалось очистить список');
                     }
                     const r = await this._importExcelRows(file, targetTid);
-                    importedCount = r.imported; errorCount = r.errors || 0;
+                    importedCount = r.imported; errorCount = r.errors || 0; skippedCount = r.skipped || 0;
                     ids = r.ids || [];
                 }
                 // Привязываем новых бойцов к турниру
@@ -1348,12 +1444,19 @@ setupAthletesImport() {
                 await this.renderParticipants();
                 await this.renderTournaments();
                 fileInput.value = '';
-                let msg = (replaceMode ? '✅ Заменён список: ' : '✅ Дополнено: ') + `${importedCount}` + (errorCount ? ` | Ошибок: ${errorCount}` : '');
-                if (targetTid && ids.length > 0) msg += `\nПривязано к турниру #${targetTid}`;
+                const detail = (replaceMode ? 'Заменён список: ' : 'Дополнено: ') + `${importedCount}`
+                    + (skippedCount ? ` (уже были: ${skippedCount})` : '')
+                    + (errorCount ? ` | Ошибок: ${errorCount}` : '');
+                if (statusEl) statusEl.innerHTML = '✅ Все спортсмены успешно загружены. ' + detail;
+                let msg = '✅ Все спортсмены успешно загружены. ' + detail;
+                if (targetTid && ids.length > 0) msg += `\nПривязано к турниру #${targetTid}: ${ids.length}`;
                 else if (!targetTid) msg += `\nСоревнований нет — турнир не создан, привязка не выполнена`;
                 toast(msg, 'success', 6000);
+                if (runBtn) runBtn.disabled = false;
             } catch (e) {
-                toast('Ошибка: ' + e.message, 'error');
+                if (statusEl) statusEl.innerHTML = '❌ Ошибка загрузки: ' + e.message;
+                toast('Ошибка загрузки: ' + e.message, 'error');
+                if (runBtn) runBtn.disabled = false;
             }
         });
     },
@@ -1370,7 +1473,7 @@ setupAthletesImport() {
                     const sheet = workbook.Sheets[workbook.SheetNames[0]];
                     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-                    let imported = 0, errors = 0;
+                    let imported = 0, errors = 0, skipped = 0;
                     const addedIds = [];
                     const existing = await API.getAthletes();
 
@@ -1426,6 +1529,7 @@ setupAthletesImport() {
                             const dup = existing.find(a => a.name.toLowerCase() === name.toLowerCase());
                             if (dup) {
                                 addedIds.push(dup.id);
+                                skipped++;
                             } else {
                                 try {
                                     const athlete = await API.addAthlete({ name, birth_year: birthYear, weight, gender, rank, region, coach });
@@ -1439,7 +1543,7 @@ setupAthletesImport() {
                         }
                     }
                     // Привязкой занимается вызывающий код (нужен одинаковый флоу для Word и Excel)
-                    resolve({ imported, errors, ids: addedIds });
+                    resolve({ imported, errors, ids: addedIds, skipped });
                 } catch (err) {
                     reject(err);
                 }
@@ -1476,7 +1580,7 @@ setupExport() {
                 tournaments.forEach(t => {
                     const opt = document.createElement('option');
                     opt.value = t.id;
-                    opt.textContent = `${t.name} (${t.date_from || t.date_to || '—'})`;
+                    opt.textContent = `${t.name} (${this.fmtDate(t.date_from || t.date_to) || '—'})`;
                     select.appendChild(opt);
                 });
 
@@ -1663,7 +1767,9 @@ setupExport() {
             }
 
             tournaments.forEach(t => {
-                const dateRange = t.date_from ? `${t.date_from}${t.date_to ? ' — ' + t.date_to : ''}` : '';
+                const dateRange = t.date_from
+                            ? `${this.fmtDate(t.date_from)}${t.date_to ? ' — ' + this.fmtDate(t.date_to) : ''}`
+                            : '';
                 const isDefault = defaultId && parseInt(defaultId) === t.id;
                 const card = document.createElement('div');
                 card.className = 'tournament-card';
@@ -1789,7 +1895,7 @@ setupExport() {
                 tournaments.forEach(t => {
                     const opt = document.createElement('option');
                     opt.value = t.id;
-                    opt.textContent = `${t.name} (${t.date_from || t.date_to || '—'})`;
+                    opt.textContent = `${t.name} (${this.fmtDate(t.date_from || t.date_to) || '—'})`;
                     select.appendChild(opt);
                 });
 
@@ -2303,7 +2409,7 @@ setupExport() {
             tournaments.forEach(t => {
                 const opt = document.createElement('option');
                 opt.value = t.id;
-                opt.textContent = `${t.name} (${t.date_from || t.date_to || '—'})`;
+                opt.textContent = `${t.name} (${this.fmtDate(t.date_from || t.date_to) || '—'})`;
                 select.appendChild(opt);
             });
 
@@ -3252,7 +3358,7 @@ async advanceWinner(tournamentId, fight, winnerId) {
             tournaments.forEach(t => {
                 const opt = document.createElement('option');
                 opt.value = t.id;
-                opt.textContent = `${t.name} (${t.date_from || t.date_to || '—'})`;
+                opt.textContent = `${t.name} (${this.fmtDate(t.date_from || t.date_to) || '—'})`;
                 select.appendChild(opt);
             });
 
@@ -3484,6 +3590,14 @@ async advanceWinner(tournamentId, fight, winnerId) {
     },
 
     // ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
+
+    // Дата YYYY-MM-DD -> ДД.ММ.ГГГГ
+    fmtDate(s) {
+        if (!s) return s;
+        const str = String(s);
+        const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return m ? `${m[3]}.${m[2]}.${m[1]}` : str;
+    },
 
     escapeHtml(text) {
         const div = document.createElement('div');

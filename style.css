@@ -770,6 +770,13 @@ td.editable:hover {
     margin-bottom: 8px;
 }
 
+/* Прокрутка в окнах справки (лицензия, соглашение, о приложении) */
+#info-modal-body {
+    max-height: 60vh;
+    overflow-y: auto;
+    padding-right: 10px;
+}
+
 #fight-winner option {
     background: #1a1a2e;
     color: #e0e0e0;

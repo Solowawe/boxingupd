@@ -86,16 +86,46 @@
                 <input type="text" id="login" name="login" placeholder="Логин" required autofocus>
                 <label for="password">Пароль</label>
                 <input type="password" id="password" name="password" placeholder="Пароль" required>
+
+                <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.85em; color:rgba(255,255,255,0.7); margin:0 0 12px 0; cursor:pointer;">
+                    <input type="checkbox" id="agree" style="width:16px; height:16px; margin:1px 0 0 0; accent-color:#ffd700;">
+                    <span>Я согласен с <a href="#" onclick="toggleTerms(event); return false;" style="color:#ffd700;">условиями пользовательского соглашения</a></span>
+                </label>
+
+                <div id="terms-box" style="display:none; max-height:140px; overflow:auto; margin-bottom:14px; padding:10px; border:1px solid rgba(255,215,0,0.25); border-radius:6px; background:rgba(0,0,0,0.25); color:rgba(255,255,255,0.75); font-size:0.82em; line-height:1.4; white-space:pre-line;">
+ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ
+
+Настоящее соглашение определяет условия использования программы «Соревнования по боксу».
+
+1. Данные, вводимые пользователем (спортсмены, соревнования, результаты), хранятся локально на устройстве и не передаются третьим лицам.
+2. Программа предоставляется «как есть». Правообладатель не несёт ответственности за прямой или косвенный ущерб от её использования.
+3. Пользователь самостоятельно проверяет корректность вводимых данных и итоговых результатов.
+4. Используя программу, вы подтверждаете согласие с данным соглашением.
+                </div>
+
                 <button type="submit" class="btn-primary">Войти</button>
             </form>
         </div>
     </div>
 
     <script>
+        function toggleTerms(e) {
+            if (e) e.preventDefault();
+            var box = document.getElementById('terms-box');
+            box.style.display = box.style.display === 'block' ? 'none' : 'block';
+        }
+
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const errBox = document.getElementById('login-error');
             errBox.style.display = 'none';
+
+            const agree = document.getElementById('agree').checked;
+            if (!agree) {
+                errBox.textContent = 'Необходимо согласиться с условиями пользовательского соглашения';
+                errBox.style.display = 'block';
+                return;
+            }
 
             const login = document.getElementById('login').value;
             const password = document.getElementById('password').value;

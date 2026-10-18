@@ -1437,17 +1437,19 @@ def import_docx():
     except Exception as e:
         return jsonify({'error': f'Не удалось прочитать Word-файл: {e}'}), 400
 
-    # Имена уже присутствующих спортсменов — чтобы не плодить дубли при «дополнении»
+    # Имена уже присутствующих спортсменов (name.lower -> id) — чтобы не плодить дубли,
+    # но при этом привязать к турниру и уже существующих бойцов из файла.
     try:
         conn0 = get_db()
-        existing_names = {r[0].lower() for r in conn0.execute("SELECT name FROM athletes")}
+        existing_names = {r[0].lower(): r[1] for r in conn0.execute("SELECT name, id FROM athletes").fetchall()}
         conn0.close()
     except Exception:
-        existing_names = set()
+        existing_names = {}
 
     imported = []
     errors = []
     new_ids = []
+    skipped = 0  # уже были в базе, но привязаны к турниру
     for table in tables:
         if not table:
             continue
@@ -1489,10 +1491,12 @@ def import_docx():
             region = cell(row, ci_region).strip()
             coach = cell(row, ci_coach).strip()
 
-            # Дубликат по имени — пропускаем (и в режиме «заменить», и в «дополнить»)
+            # Если спортсмен с таким именем уже есть — не плодим дубль,
+            # но привязываем его к турниру (по существующему id).
             if name.lower() in existing_names:
+                new_ids.append(existing_names[name.lower()])
+                skipped += 1  # уже есть — привязываем существующего, не создавая дубль
                 continue
-            existing_names.add(name.lower())
 
             conn = get_db()
             try:
@@ -1502,6 +1506,7 @@ def import_docx():
                     (name, birth_year, weight if weight is not None else 0.0, default_gender, rank, region, coach)
                 )
                 conn.commit()
+                existing_names[name.lower()] = cur.lastrowid
                 new_ids.append(cur.lastrowid)
                 imported.append({'name': name, 'weight': weight})
             except Exception as e:
@@ -1509,10 +1514,10 @@ def import_docx():
             finally:
                 conn.close()
 
-    if not imported and not errors:
+    if not imported and not errors and not new_ids:
         return jsonify({'error': 'Не найдено строк для импорта (проверьте, что в таблице есть столбцы ФИО/имя и заголовки)'}), 400
 
-    return jsonify({'imported': len(imported), 'errors': len(errors), 'ids': new_ids, 'errorlist': errors[:20]})
+    return jsonify({'imported': len(imported), 'errors': len(errors), 'ids': new_ids, 'skipped': skipped, 'errorlist': errors[:20]})
 
 
 # ======================== СТАТИЧЕСКИЕ ФАЙЛЫ ========================

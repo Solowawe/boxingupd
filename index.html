@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Соревнования по боксу</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="style.css?v=20261013d">
+    <link rel="stylesheet" href="style.css?v=20261013l">
 </head>
 <body>
     <div id="toast-container"></div>
@@ -22,6 +22,9 @@
             </nav>
             <div style="margin-top:10px;">
                 <button class="btn-secondary" onclick="App.checkUpdates()" title="Проверить наличие новых версий приложения в GitHub">🔄 Проверить обновления</button>
+                <button class="btn-secondary" onclick="App.openLicense()" title="Лицензионное соглашение">📜 Лицензия</button>
+                <button class="btn-secondary" onclick="App.openTerms()" title="Пользовательское соглашение">⚖️ Пользовательское соглашение</button>
+                <button class="btn-secondary" onclick="App.openAbout()" title="О приложении">ℹ️ О приложении</button>
                 <span id="update-status" class="info" style="margin-left:10px;"></span>
             </div>
         </header>
@@ -53,13 +56,11 @@
                                 </select>
                                 <button id="import-athletes-btn" class="btn-primary" style="flex:0;">Импорт</button>
                             </div>
+                            <div id="import-status" class="info" style="margin-top:8px; font-size:0.9em;"></div>
                             <div class="form-row" style="margin-top:8px;">
                                 <label style="margin-right:16px; font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="append" checked style="accent-color:#ffd700;"> Дополнить список</label>
                                 <label style="font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="replace" style="accent-color:#ffd700;"> Заменить список (удалить старых)</label>
                             </div>
-                            <p class="info" style="margin-top:8px; font-size:0.8em;">
-                                Word: столбцы «ФИО», «Весовая категория», «Тренер». Excel: Ф.И.О.; Год рожд.; Вес; Пол; Разряд; Регион; Тренер.
-                            </p>
                         </div>
                         <div id="tournaments-container"></div>
                     </div>
@@ -249,7 +250,16 @@
         </div>
     </div>
 
+    <!-- Модальное окно «Справка» -->
+    <div id="info-modal" class="modal">
+        <div class="modal-content" style="max-width:720px;">
+            <span class="close" onclick="App.closeInfo()">&times;</span>
+            <h2 id="info-modal-title">Справка</h2>
+            <div id="info-modal-body" style="line-height:1.5; color:#d0d0d0; font-size:0.95em; white-space:pre-line;"></div>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="app.js?v=20261013d"></script>
+    <script src="app.js?v=20261013l"></script>
 </body>
 </html>
