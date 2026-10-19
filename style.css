@@ -65,6 +65,11 @@ body {
 header {
     text-align: center;
     margin-bottom: 30px;
+    background: rgba(22, 24, 44, 0.92);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255, 215, 0, 0.15);
+    padding: 10px;
+    position: static; /* прокручивается; «sticky» включает чекбокс через JS */
 }
 
 header h1 {

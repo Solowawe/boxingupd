@@ -338,10 +338,10 @@ async openAbout() {
 
     async init() {
         this.setupTabs();
-        // Плавающая шапка: чекбокс «Закрепить шапку» (состояние хранится на сервере/в данных,
-        // чтобы не слетало в портативной версии, где меняется порт/origin)
+        // Плавающая шапка: чекбокс «Закрепить шапку» (состояние хранится на сервере/в данных)
         const floatingHeader = document.getElementById('floating-header');
-        if (floatingHeader) {
+        const appHeaderEl = document.querySelector('header');
+        if (floatingHeader && appHeaderEl) {
             const saveFloatSetting = async () => {
                 try {
                     let s = await fetch('/api/settings').then(r => r.json());
@@ -355,7 +355,15 @@ async openAbout() {
                 } catch (e) { /* ignore */ }
             };
             const applyFloat = () => {
-                document.body.classList.toggle('no-sticky-header', !floatingHeader.checked);
+                if (floatingHeader.checked) {
+                    appHeaderEl.style.position = 'sticky';
+                    appHeaderEl.style.top = '0';
+                    appHeaderEl.style.zIndex = '500';
+                } else {
+                    appHeaderEl.style.position = 'static';
+                    appHeaderEl.style.top = '';
+                    appHeaderEl.style.zIndex = '';
+                }
                 saveFloatSetting();
             };
             floatingHeader.addEventListener('change', applyFloat);
