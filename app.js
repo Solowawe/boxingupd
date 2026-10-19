@@ -618,12 +618,14 @@ async openAbout() {
                             coach
                         });
 
-                        // Добавляем в выпадающий список
-                        const opt = document.createElement('option');
-                        opt.value = athlete.id;
-                        opt.textContent = `${athlete.name} (${athlete.weight} кг, ${athlete.gender})`;
-                        athleteSelect.appendChild(opt);
-                        athleteSelect.value = athlete.id;
+                        // Добавляем в выпадающий список (если он ещё присутствует)
+                        if (athleteSelect) {
+                            const opt = document.createElement('option');
+                            opt.value = athlete.id;
+                            opt.textContent = `${athlete.name} (${athlete.weight} кг, ${athlete.gender})`;
+                            athleteSelect.appendChild(opt);
+                            athleteSelect.value = athlete.id;
+                        }
 
                         // Автоматически привязываем к турниру по умолчанию
                         const defaultId = this.getDefaultTournamentId();
@@ -656,6 +658,17 @@ async openAbout() {
 
                     await this.renderParticipants();
                     await this.renderTournaments();
+                    // Если менялись пол/вес участника — пересчитываем жеребьёвку и сетку,
+                    // чтобы новое распределение по категориям применилось.
+                    if (athleteId && tournamentId) {
+                        try {
+                            await this.performLottery(parseInt(tournamentId));
+                            const up = await API.getTournament(parseInt(tournamentId));
+                            await this.renderBracket(up);
+                        } catch (err) {
+                            console.error('Ошибка пересчёта жеребьёвки:', err);
+                        }
+                    }
                     toast('✅ Спортсмен добавлен и привязан к турниру!');
                 } catch (err) {
                     toast('Ошибка: ' + err.message);
@@ -671,7 +684,7 @@ async openAbout() {
                 tournaments.forEach(t => {
                     const opt = document.createElement('option');
                     opt.value = t.id;
-                    opt.textContent = `${t.name} (${t.date_from || t.date_to || '—'}) [${t.athlete_count || 0} уч.]`;
+                    opt.textContent = `${t.name} (${this.fmtDate(t.date_from || t.date_to) || '—'}) [${t.athlete_count || 0} уч.]`;
                     select.appendChild(opt);
                 });
 

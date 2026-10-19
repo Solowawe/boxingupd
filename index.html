@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Соревнования по боксу</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%A5%8A</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20261013o">
+    <link rel="stylesheet" href="style.css?v=20261014a">
 </head>
 <body>
     <div id="toast-container"></div>
@@ -77,18 +77,7 @@
                         </select>
                     </div>
                     <form id="participant-form" autocomplete="off">
-                        <div class="form-row" style="margin-bottom:8px;">
-                            <select id="participant-athlete-select" style="flex:2;min-width:250px;padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
-                                <option value="">-- Участников пока нет --</option>
-                            </select>
-                        </div>
-                        <div class="form-row" style="margin-bottom:8px;">
-                            <select id="participant-add-select" style="flex:2;min-width:250px;padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
-                                <option value="">-- Добавить спортсмена (не в турнире) --</option>
-                            </select>
-                            <button type="submit" class="btn-primary" id="add-participant-btn">➕ Добавить</button>
-                        </div>
-                        <button type="button" id="add-manual-athlete-btn" class="btn-secondary" style="margin-top:4px;">✏️ Добавить участника вручную</button>
+                        <button type="button" id="add-manual-athlete-btn" class="btn-secondary" style="margin-bottom:10px;">✏️ Добавить участника вручную</button>
                     </form>
                     <div id="manual-athlete-form" style="display:none; margin-top:15px; padding:15px; background:rgba(255,215,0,0.05); border-radius:8px; border:1px solid rgba(255,215,0,0.2);">
                         <h3 style="color:#ffd700; margin-bottom:10px; font-size:1em;" id="manual-form-title">➕ Новый спортсмен</h3>
@@ -260,6 +249,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="app.js?v=20261013o"></script>
+    <script src="app.js?v=20261014a"></script>
 </body>
 </html>
