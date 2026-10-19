@@ -37,10 +37,7 @@ from flask_cors import CORS
 from database import get_db, init_db
 
 # ======================== ПУТИ (обычный запуск / заморозка PyInstaller) ========================
-# В собранном .exe ресурсы (index.html и др.) лежат во временной папке _MEIPASS,
-# а данные (boxing.db, бэкапы) — в отдельной папке пользователя %APPDATA%\BoxingApp.
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-ASSETS_DIR = getattr(sys, '_MEIPASS', PROJECT_DIR)
 
 
 def _get_data_dir():
@@ -59,6 +56,24 @@ def _get_data_dir():
 
 
 DATA_DIR = _get_data_dir()
+
+# Ресурсы (index.html, app.js и др.) отдаём из каталога данных. В заморозке (exe)
+# при первом запуске копируем их туда из _MEIPASS — тогда «Проверить обновления»
+# пишет новые файлы в постоянное место, и они сохраняются после перезапуска.
+if getattr(sys, 'frozen', False):
+    _bundled = getattr(sys, '_MEIPASS', PROJECT_DIR)
+    for _f in ('index.html', 'login.html', 'app.js', 'style.css', 'update-manifest.json'):
+        _dst = os.path.join(DATA_DIR, _f)
+        if not os.path.exists(_dst):
+            _src = os.path.join(_bundled, _f)
+            if os.path.exists(_src):
+                try:
+                    shutil.copy2(_src, _dst)
+                except Exception:
+                    pass
+    ASSETS_DIR = DATA_DIR
+else:
+    ASSETS_DIR = PROJECT_DIR
 
 
 def _db_path():
@@ -145,6 +160,24 @@ def _write_local_version(v):
             f.write(str(v).strip())
     except Exception:
         pass
+
+
+def _shipped_version():
+    """Фактическая версия установленного приложения — из встроенного/локального
+    update-manifest.json (та самая, что показывается в «О приложении»).
+    Это надёжнее, чем local_version.txt (файл отслеживания обновлений), который
+    может расходиться с реальной версией после пересборки/копирования.
+    """
+    try:
+        mpath = os.path.join(ASSETS_DIR, 'update-manifest.json')
+        with open(mpath, 'r', encoding='utf-8') as f:
+            m = json.load(f)
+        v = str(m.get('version', ''))
+        if v:
+            return v
+    except Exception:
+        pass
+    return _read_local_version()
 
 
 def _login_throttled(client_ip):
@@ -1230,11 +1263,12 @@ def update_fight_result(tournament_id, fight_id):
 def update_status():
     """Проверка доступных обновлений из GitHub."""
     configured = bool(UPDATE_OWNER and UPDATE_REPO)
+    local_version = _shipped_version()
     if not configured:
         return jsonify({
             'configured': False,
             'message': 'Обновления не настроены. Укажите GITHUB_OWNER и GITHUB_REPO.',
-            'local_version': _read_local_version()
+            'local_version': local_version
         })
 
     try:
@@ -1245,12 +1279,11 @@ def update_status():
         return jsonify({
             'configured': True, 'owner': UPDATE_OWNER, 'repo': UPDATE_REPO, 'branch': UPDATE_BRANCH,
             'error': f'Не удалось получить манифест: {e}',
-            'local_version': _read_local_version()
+            'local_version': local_version
         })
 
     version = str(manifest.get('version', ''))
     files = [f for f in manifest.get('files', []) if f in UPDATE_ALLOWED]
-    local_version = _read_local_version()
     up_to_date = bool(local_version and local_version == version)
     return jsonify({
         'configured': True,
@@ -1269,7 +1302,9 @@ def update_apply():
         return jsonify({'error': 'Обновления не настроены. Укажите GITHUB_OWNER и GITHUB_REPO.'}), 400
 
     base = f'https://raw.githubusercontent.com/{UPDATE_OWNER}/{UPDATE_REPO}/{UPDATE_BRANCH}'
-    app_dir = Path(__file__).resolve().parent
+    # Пишем обновлённые файлы в каталог данных (там же, откуда они отдаются),
+    # чтобы они сохранялись после перезапуска в портативной/собранной версии.
+    app_dir = Path(ASSETS_DIR)
 
     try:
         manifest = json.loads(_fetch_url(f'{base}/{UPDATE_MANIFEST}', timeout=20).decode('utf-8'))

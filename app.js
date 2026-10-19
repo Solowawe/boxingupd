@@ -338,6 +338,18 @@ async openAbout() {
 
     async init() {
         this.setupTabs();
+        // Плавающая шапка: чекбокс «Закрепить шапку» (состояние сохраняется)
+        const floatingHeader = document.getElementById('floating-header');
+        if (floatingHeader) {
+            const saved = localStorage.getItem('floatingHeader');
+            if (saved !== null) floatingHeader.checked = saved === '1';
+            const applyFloat = () => {
+                document.body.classList.toggle('no-sticky-header', !floatingHeader.checked);
+                localStorage.setItem('floatingHeader', floatingHeader.checked ? '1' : '0');
+            };
+            floatingHeader.addEventListener('change', applyFloat);
+            applyFloat();
+        }
         // Закрытие окна «Справка» кликом по фону
         const infoModal = document.getElementById('info-modal');
         if (infoModal) {
