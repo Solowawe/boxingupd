@@ -2105,6 +2105,13 @@ setupExport() {
         html += '</div>';
 
         results.innerHTML = html;
+
+        // Автосохранение жеребьёвки при смене дня у слота
+        results.querySelectorAll('.lottery-day-select').forEach(sel => {
+            sel.addEventListener('change', async () => {
+                await this.saveLotteryFromUI();
+            });
+        });
     },
 
     async refreshLottery(tournamentId) {
