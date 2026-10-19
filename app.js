@@ -338,17 +338,35 @@ async openAbout() {
 
     async init() {
         this.setupTabs();
-        // Плавающая шапка: чекбокс «Закрепить шапку» (состояние сохраняется)
+        // Плавающая шапка: чекбокс «Закрепить шапку» (состояние хранится на сервере/в данных,
+        // чтобы не слетало в портативной версии, где меняется порт/origin)
         const floatingHeader = document.getElementById('floating-header');
         if (floatingHeader) {
-            const saved = localStorage.getItem('floatingHeader');
-            if (saved !== null) floatingHeader.checked = saved === '1';
+            const saveFloatSetting = async () => {
+                try {
+                    let s = await fetch('/api/settings').then(r => r.json());
+                    s = s || {};
+                    s.floatingHeader = floatingHeader.checked ? '1' : '0';
+                    await fetch('/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(s)
+                    });
+                } catch (e) { /* ignore */ }
+            };
             const applyFloat = () => {
                 document.body.classList.toggle('no-sticky-header', !floatingHeader.checked);
-                localStorage.setItem('floatingHeader', floatingHeader.checked ? '1' : '0');
+                saveFloatSetting();
             };
             floatingHeader.addEventListener('change', applyFloat);
-            applyFloat();
+            // Загружаем сохранённое значение
+            (async () => {
+                try {
+                    const s = await fetch('/api/settings').then(r => r.json());
+                    if (s && s.floatingHeader !== undefined) floatingHeader.checked = s.floatingHeader === '1';
+                } catch (e) { /* ignore */ }
+                applyFloat();
+            })();
         }
         // Закрытие окна «Справка» кликом по фону
         const infoModal = document.getElementById('info-modal');

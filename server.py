@@ -57,20 +57,49 @@ def _get_data_dir():
 
 DATA_DIR = _get_data_dir()
 
+
+def _read_json_version(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return str(json.load(f).get('version', '')).strip()
+    except Exception:
+        return ''
+
+
+def _ver_tuple(v):
+    parts = (str(v or '').split('.') + ['0', '0', '0'])[:3]
+    try:
+        return tuple(int(p) for p in parts)
+    except Exception:
+        return (0, 0, 0)
+
+
 # Ресурсы (index.html, app.js и др.) отдаём из каталога данных. В заморозке (exe)
-# при первом запуске копируем их туда из _MEIPASS — тогда «Проверить обновления»
-# пишет новые файлы в постоянное место, и они сохраняются после перезапуска.
+# копируем их туда из _MEIPASS, если файла нет ИЛИ сохранённая версия СТАРШЕ встроенной —
+# так новая сборка обновляет старый каталог, но не затирает пользовательские обновления.
 if getattr(sys, 'frozen', False):
     _bundled = getattr(sys, '_MEIPASS', PROJECT_DIR)
+    _bm = _read_json_version(os.path.join(_bundled, 'update-manifest.json'))
     for _f in ('index.html', 'login.html', 'app.js', 'style.css', 'update-manifest.json'):
         _dst = os.path.join(DATA_DIR, _f)
+        _src = os.path.join(_bundled, _f)
+        if not os.path.exists(_src):
+            continue
+        _need_copy = False
         if not os.path.exists(_dst):
-            _src = os.path.join(_bundled, _f)
-            if os.path.exists(_src):
-                try:
-                    shutil.copy2(_src, _dst)
-                except Exception:
-                    pass
+            _need_copy = True
+        elif _f == 'update-manifest.json':
+            _dm = _read_json_version(_dst)
+            _need_copy = _ver_tuple(_bm) > _ver_tuple(_dm)
+        else:
+            # статический файл: обновляем, если встроенная версия не ниже сохранённой
+            _dm = _read_json_version(os.path.join(DATA_DIR, 'update-manifest.json'))
+            _need_copy = _ver_tuple(_bm) > _ver_tuple(_dm)
+        if _need_copy:
+            try:
+                shutil.copy2(_src, _dst)
+            except Exception:
+                pass
     ASSETS_DIR = DATA_DIR
 else:
     ASSETS_DIR = PROJECT_DIR
@@ -1255,6 +1284,35 @@ def update_fight_result(tournament_id, fight_id):
     return jsonify({'message': 'Результат сохранён'})
 
 
+
+
+# ======================== API: НАСТРОЙКИ ========================
+
+SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
+
+
+def _load_settings():
+    try:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    return jsonify(_load_settings())
+
+
+@app.route('/api/settings', methods=['POST'])
+def save_settings():
+    data = request.get_json(silent=True) or {}
+    try:
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ======================== API: ОБНОВЛЕНИЯ ========================
