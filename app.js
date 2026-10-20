@@ -2061,7 +2061,11 @@ setupExport() {
 
         // Умный подбор соперников по весу и возрасту (олимпийская система)
         const lotteryResults = {};
-        Object.entries(weightGroups).forEach(([weightClass, group]) => {
+        // Сортируем группы по весу — от лёгких к тяжёлым
+        const wgEntries = Object.entries(weightGroups)
+            .map(([wc, grp]) => [wc, grp, parseFloat((String(wc).match(/(\d+(?:\.\d+)?)/) || [])[1]) || 0])
+            .sort((a, b) => a[2] - b[2]);
+        wgEntries.forEach(([weightClass, group]) => {
             const ordered = this._pairAndPlaceLottery(group); // массив слотов, null = бай
             let slot = 1;
             ordered.forEach(ath => {
@@ -2171,7 +2175,11 @@ setupExport() {
 
         // Умный подбор соперников по весу и возрасту (олимпийская система)
         const lotteryResults = {};
-        Object.entries(weightGroups).forEach(([weightClass, group]) => {
+        // Сортируем группы по весу — от лёгких к тяжёлым
+        const wgEntries = Object.entries(weightGroups)
+            .map(([wc, grp]) => [wc, grp, parseFloat((String(wc).match(/(\d+(?:\.\d+)?)/) || [])[1]) || 0])
+            .sort((a, b) => a[2] - b[2]);
+        wgEntries.forEach(([weightClass, group]) => {
             const ordered = this._pairAndPlaceLottery(group); // массив слотов, null = бай
             let slot = 1;
             ordered.forEach(ath => {

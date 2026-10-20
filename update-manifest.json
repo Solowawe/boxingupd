@@ -1,5 +1,5 @@
 {
-  "version": "1.0.32",
+  "version": "1.0.34",
   "files": [
     "app.js",
     "index.html",
@@ -8,7 +8,7 @@
     "server.py",
     "database.py",
     "app.py",
-    "requirements.txt"
+    "requirements.txt",
     "update-manifest.json"
   ]
 }
