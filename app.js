@@ -2119,6 +2119,7 @@ setupExport() {
                             <th>Слот</th>
                             <th>День</th>
                             <th>Ф.И.О.</th>
+                            <th>Год рождения</th>
                             <th>Вес</th>
                             <th>Действия</th>
                         </tr>
@@ -2131,6 +2132,7 @@ setupExport() {
                             <td><strong>${a.slot}</strong></td>
                             <td>${daySelect}</td>
                             <td>${this.escapeHtml(a.name)}</td>
+                            <td>${a.birth_year || ''}</td>
                             <td>${a.weight} кг</td>
                             <td><button class="btn-edit-fighter" onclick="App.editLotteryAthlete(${tournamentId}, this, '${this.escapeHtml(weightClass)}', ${a.slot}, ${a.athlete_id})" title="Заменить спортсмена">✏️</button></td>
                         </tr>`;
@@ -2394,7 +2396,7 @@ setupExport() {
             if (duplicateRow) {
                 const prev = athletes.find(a => a.id === currentAthleteId);
                 const nc2 = duplicateRow.querySelector('td:nth-child(3)');
-                const wc2 = duplicateRow.querySelector('td:nth-child(4)');
+                const wc2 = duplicateRow.querySelector('td:nth-child(5)');
                 if (nc2) { nc2.textContent = prev ? prev.name : ''; nc2.style.color = '#ffd700'; nc2.style.fontWeight = 'bold'; }
                 if (wc2) { wc2.textContent = prev ? prev.weight + ' кг' : ''; wc2.style.color = '#ffd700'; }
                 duplicateRow.dataset.athleteId = currentAthleteId;
@@ -2402,7 +2404,7 @@ setupExport() {
 
             const newAthlete = athletes.find(a => a.id === newId);
             const nc = row.querySelector('td:nth-child(3)');
-            const wc3 = row.querySelector('td:nth-child(4)');
+            const wc3 = row.querySelector('td:nth-child(5)');
             if (nc) { nc.textContent = newAthlete ? newAthlete.name : ''; nc.style.color = '#ffd700'; nc.style.fontWeight = 'bold'; }
             if (wc3) { wc3.textContent = (newAthlete ? newAthlete.weight : '') + ' кг'; wc3.style.color = '#ffd700'; }
             row.dataset.athleteId = newId;
