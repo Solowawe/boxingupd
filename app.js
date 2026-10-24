@@ -256,6 +256,29 @@ const App = {
         }
     },
 
+    openReportPreview(tournamentId) {
+        const m = document.getElementById('preview-modal');
+        if (!m) return;
+        const body = document.getElementById('preview-modal-body');
+        document.getElementById('preview-modal-title').textContent = 'Загрузка предпросмотра…';
+        body.innerHTML = '⏳ Загрузка…';
+        m.style.display = 'block';
+        fetch(`/api/report/${tournamentId}/preview`)
+            .then(r => r.json())
+            .then(d => {
+                if (d.error) { body.innerHTML = '<div style="color:#ff6b6b;">Ошибка: ' + (d.error||'') + '</div>'; }
+                else {
+                    document.getElementById('preview-modal-title').textContent = d.title || 'Предпросмотр отчёта';
+                    body.innerHTML = d.html || '';
+                }
+            })
+            .catch(e => { body.innerHTML = '<div style="color:#ff6b6b;">Ошибка: ' + e.message + '</div>'; });
+    },
+    closePreview() {
+        const m = document.getElementById('preview-modal');
+        if (m) m.style.display = 'none';
+    },
+
     openInfo(title, body) {
         const m = document.getElementById('info-modal');
         if (!m) return;
@@ -381,6 +404,13 @@ async openAbout() {
         if (infoModal) {
             infoModal.addEventListener('click', (e) => {
                 if (e.target === infoModal) infoModal.style.display = 'none';
+            });
+        }
+        // Закрытие «Предпросмотра» кликом по фону
+        const previewModal = document.getElementById('preview-modal');
+        if (previewModal) {
+            previewModal.addEventListener('click', (e) => {
+                if (e.target === previewModal) previewModal.style.display = 'none';
             });
         }
         this.setupExcelImport();
@@ -1013,6 +1043,17 @@ async openAbout() {
         } catch (err) {
             toast('Ошибка экспорта протокола: ' + err.message);
         }
+    },
+
+    // Скачивание отчёта главного судьи (.docx)
+    downloadJudgeReport(tournamentId) {
+        const a = document.createElement('a');
+        a.href = `/api/report/${tournamentId}`;
+        a.download = `otchet_glavnogo_sudi_${tournamentId}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast('📄 Отчёт главного судьи формируется…', 'info', 3000);
     },
 
     // Печать результатов текущего соревнования
@@ -1776,7 +1817,10 @@ setupExport() {
             }
 
             try {
-                const result = await API.addTournament({ name, date_from: dateFrom, date_to: dateTo || dateFrom, days });
+                const chiefReferee = document.getElementById('tournament-chief-referee')?.value.trim() || '';
+                const chiefSecretary = document.getElementById('tournament-chief-secretary')?.value.trim() || '';
+                const venue = document.getElementById('tournament-venue')?.value.trim() || '';
+                const result = await API.addTournament({ name, date_from: dateFrom, date_to: dateTo || dateFrom, days, chief_referee: chiefReferee, chief_secretary: chiefSecretary, venue });
                 document.getElementById('tournament-form').reset();
                 // Новое соревнование становится по умолчанию
                 this.saveDefaultTournament(result.id);
@@ -1833,8 +1877,11 @@ setupExport() {
                     <div>
                         <button class="btn-secondary" onclick="App.setDefaultTournament(${t.id})">${isDefault ? '⭐ Уже по умолчанию' : '⬇ По умолчанию'}</button>
                         <button class="btn-secondary" onclick="App.manageParticipants(${t.id})">👥 Участники</button>
+                        <button class="btn-secondary" onclick="App.editJudges(${t.id})">⚖️ Судьи</button>
                         <button class="btn-secondary" onclick="App.exportTournamentToExcel(${t.id})">📊 Excel</button>
                         <button class="btn-secondary" onclick="App.exportProtocolToExcel(${t.id})">📤 Протокол</button>
+                        <button class="btn-secondary" onclick="App.downloadJudgeReport(${t.id})">📄 Отчёт гл. судьи</button>
+                        <button class="btn-secondary" onclick="App.openReportPreview(${t.id})">👁 Предпросмотр</button>
                         <button class="btn-secondary" style="color: #ff6b6b;" onclick="App.clearParticipants(${t.id})">🗑 Очистить участников</button>
                         <button class="btn-secondary" onclick="App.deleteTournament(${t.id})">❌ Удалить соревнование</button>
                     </div>
@@ -1860,6 +1907,28 @@ setupExport() {
             await this.renderTournaments();
         } catch (err) {
             toast('Ошибка: ' + err.message);
+        }
+    },
+
+    // Указать/изменить судей текущего соревнования
+    async editJudges(tournamentId) {
+        try {
+            const t = await API.getTournament(tournamentId);
+            const ref = prompt('Главный судья (Ф.И.О.):', t.chief_referee || '') || '';
+            if (ref === null) return;
+            const sec = prompt('Главный секретарь (Ф.И.О.):', t.chief_secretary || '') || '';
+            if (sec === null) return;
+            const venue = prompt('Место проведения:', t.venue || '') || '';
+            if (venue === null) return;
+            await fetch(`/api/tournaments/${tournamentId}/judges`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chief_referee: ref, chief_secretary: sec, venue })
+            });
+            toast('✅ Судьи и место сохранены', 'success');
+            await this.renderTournaments();
+        } catch (e) {
+            toast('Ошибка: ' + e.message, 'error');
         }
     },
 

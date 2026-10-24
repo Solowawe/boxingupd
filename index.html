@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Соревнования по боксу</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%A5%8A</text></svg>">
-    <link rel="stylesheet" href="style.css?v=20261014q">
+    <link rel="stylesheet" href="style.css?v=20261015c">
 </head>
 <body>
     <div id="toast-container"></div>
@@ -42,9 +42,12 @@
                             <input type="text" id="tournament-name" placeholder="Название соревнования" required autocomplete="off">
                             <input type="date" id="tournament-date-from" placeholder="Дата с" required autocomplete="off">
                             <input type="date" id="tournament-date-to" placeholder="Дата по" required autocomplete="off">
-                            <!-- Счётчик дней закомментирован — число дней берётся из разницы дат
-                            <input type="number" id="tournament-days" placeholder="Дней" min="1" max="14" value="1" title="Число дней соревнования" style="max-width:100px;" autocomplete="off"> -->
                             <button type="submit" class="btn-primary">🏆 Создать соревнование</button>
+                        </div>
+                        <div class="form-row" style="margin-top:8px;">
+                            <input type="text" id="tournament-chief-referee" placeholder="Главный судья" autocomplete="off" title="Ф.И.О. главного судьи">
+                            <input type="text" id="tournament-chief-secretary" placeholder="Главный секретарь" autocomplete="off" title="Ф.И.О. главного секретаря">
+                            <input type="text" id="tournament-venue" placeholder="Место проведения" autocomplete="off" title="Адрес/название комплекса">
                         </div>
                     </form>
                     <div class="tournament-list">
@@ -251,7 +254,16 @@
         </div>
     </div>
 
+    <!-- Модальное окно «Предпросмотр отчёта» -->
+    <div id="preview-modal" class="modal">
+        <div class="modal-content" style="max-width:760px;">
+            <span class="close" onclick="App.closePreview()">&times;</span>
+            <h2 id="preview-modal-title">Предпросмотр</h2>
+            <div id="preview-modal-body" style="max-height:70vh; overflow-y:auto; color:#d0d0d0; font-size:0.92em; line-height:1.4;"></div>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="app.js?v=20261014q"></script>
+    <script src="app.js?v=20261015c"></script>
 </body>
 </html>

@@ -247,14 +247,17 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS tournaments (
-            id          SERIAL PRIMARY KEY,
-            name        TEXT    NOT NULL,
-            date_from   TEXT    NOT NULL,
-            date_to     TEXT    NOT NULL,
-            weight_step REAL    DEFAULT 5.0,
-            days        INTEGER DEFAULT 1,
-            completed   INTEGER DEFAULT 0,
-            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            id               SERIAL PRIMARY KEY,
+            name             TEXT    NOT NULL,
+            date_from        TEXT    NOT NULL,
+            date_to          TEXT    NOT NULL,
+            weight_step      REAL    DEFAULT 5.0,
+            days             INTEGER DEFAULT 1,
+            completed        INTEGER DEFAULT 0,
+            chief_referee    TEXT    DEFAULT '',
+            chief_secretary  TEXT    DEFAULT '',
+            venue            TEXT    DEFAULT '',
+            created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS fights (
@@ -347,6 +350,15 @@ def init_db():
         """)
         if cursor.fetchone() is None:
             cursor.execute("ALTER TABLE lottery ADD COLUMN day INTEGER DEFAULT 1")
+
+        # Миграция: поля судей в таблице tournaments (PostgreSQL)
+        for _col in ('chief_referee', 'chief_secretary', 'venue'):
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'tournaments' AND column_name = %s
+            """, (_col,))
+            if cursor.fetchone() is None:
+                cursor.execute(f"ALTER TABLE tournaments ADD COLUMN {_col} TEXT DEFAULT ''")
     else:
         # SQLite: AUTOINCREMENT вместо SERIAL
         conn._conn.executescript(ddl.replace('SERIAL PRIMARY KEY', 'INTEGER PRIMARY KEY AUTOINCREMENT'))
@@ -369,6 +381,15 @@ def init_db():
         lcols = [r[1] for r in conn._conn.execute("PRAGMA table_info(lottery)").fetchall()]
         if 'day' not in lcols:
             conn._conn.execute("ALTER TABLE lottery ADD COLUMN day INTEGER DEFAULT 1")
+
+        # Миграция: поля судей в таблице tournaments (SQLite)
+        t2cols = [r[1] for r in conn._conn.execute("PRAGMA table_info(tournaments)").fetchall()]
+        if 'chief_referee' not in t2cols:
+            conn._conn.execute("ALTER TABLE tournaments ADD COLUMN chief_referee TEXT DEFAULT ''")
+        if 'chief_secretary' not in t2cols:
+            conn._conn.execute("ALTER TABLE tournaments ADD COLUMN chief_secretary TEXT DEFAULT ''")
+        if 'venue' not in t2cols:
+            conn._conn.execute("ALTER TABLE tournaments ADD COLUMN venue TEXT DEFAULT ''")
 
     conn.commit()
     conn.close()

@@ -31,10 +31,20 @@ import socket
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, request, jsonify, send_from_directory, g, session, redirect, url_for
+from flask import Flask, request, jsonify, send_file, send_from_directory, g, session, redirect, url_for
 from flask_cors import CORS
 
 from database import get_db, init_db
+
+# Генерация отчётов в Word (.docx) — опционально
+try:
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    _HAS_DOCX = True
+except Exception:
+    Document = None
+    _HAS_DOCX = False
 
 # ======================== ПУТИ (обычный запуск / заморозка PyInstaller) ========================
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -527,13 +537,16 @@ def add_tournament():
 
     conn = get_db()
     cursor = conn.execute(
-        "INSERT INTO tournaments (name, date_from, date_to, weight_step, days) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO tournaments (name, date_from, date_to, weight_step, days, chief_referee, chief_secretary, venue) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             data['name'].strip(),
             data['date_from'],
             data.get('date_to', data['date_from']),
             float(data.get('weight_step', 5.0)),
-            int(data.get('days', 1) or 1)
+            int(data.get('days', 1) or 1),
+            (data.get('chief_referee') or '').strip(),
+            (data.get('chief_secretary') or '').strip(),
+            (data.get('venue') or '').strip()
         )
     )
     tournament_id = cursor.lastrowid
@@ -688,6 +701,27 @@ def delete_tournament(tournament_id):
     """Удалить соревнование со всеми боями (каскадное удаление через FOREIGN KEY)."""
     conn = get_db()
     conn.execute("DELETE FROM tournaments WHERE id = ?", (tournament_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/tournaments/<int:tournament_id>/judges', methods=['POST'])
+def update_tournament_judges(tournament_id):
+    """Обновить судей и место проведения текущего соревнования."""
+    data = request.get_json(silent=True) or {}
+    conn = get_db()
+    t = conn.execute("SELECT id FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+    if t is None:
+        conn.close()
+        return jsonify({'error': 'Соревнование не найдено'}), 404
+    conn.execute(
+        "UPDATE tournaments SET chief_referee = ?, chief_secretary = ?, venue = ? WHERE id = ?",
+        ((data.get('chief_referee') or '').strip(),
+         (data.get('chief_secretary') or '').strip(),
+         (data.get('venue') or '').strip(),
+         tournament_id)
+    )
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -1612,6 +1646,309 @@ def import_docx():
         return jsonify({'error': 'Не найдено строк для импорта (проверьте, что в таблице есть столбцы ФИО/имя и заголовки)'}), 400
 
     return jsonify({'imported': len(imported), 'errors': len(errors), 'ids': new_ids, 'skipped': skipped, 'errorlist': errors[:20]})
+
+
+# ======================== API: ОТЧЁТ ГЛАВНОГО СУДЬИ (.docx) ========================
+
+@app.route('/api/report/<int:tournament_id>/preview', methods=['GET'])
+def report_preview(tournament_id):
+    """HTML-предпросмотр отчёта главного судьи данными из приложения."""
+    from collections import defaultdict as DD
+    import re as RE
+    conn = get_db()
+    t = row_to_dict(conn.execute("SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
+    if t is None:
+        conn.close()
+        return jsonify({'error': 'Соревнование не найдено'}), 404
+    ath_ids = [r['athlete_id'] for r in conn.execute(
+        "SELECT athlete_id FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchall()]
+    athletes = []
+    if ath_ids:
+        ph = ','.join('?' * len(ath_ids))
+        athletes = rows_to_list(conn.execute(f"SELECT * FROM athletes WHERE id IN ({ph})", ath_ids).fetchall())
+    lottery = rows_to_list(conn.execute(
+        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+    results = rows_to_list(conn.execute(
+        "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
+    conn.close()
+
+    groups = DD(list); order = []
+    for s in lottery:
+        if s['weight_class'] not in groups:
+            order.append(s['weight_class'])
+        groups[s['weight_class']].append(s)
+    for wc in groups:
+        groups[wc].sort(key=lambda x: x['slot'])
+    order.sort(key=lambda wc: float((RE.search(r'(\d+(?:\.\d+)?)', wc or '') or RE.search(r'0',''))[1] or 0))
+    id2 = {a['id']: a for a in athletes}
+
+    def esc(x):
+        return str(x or '').replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+
+    def fmt_date(s):
+        p = (s or '').split('-')
+        return f'{p[2]}.{p[1]}.{p[0]}' if len(p) == 3 else (s or '')
+
+    h = []
+    h.append('<div style="text-align:center;font-weight:bold;font-size:16px;">ОТЧЁТ ГЛАВНОГО СУДЬИ</div>')
+    h.append(f'<div style="text-align:center;font-weight:bold;font-size:14px;">{esc(t.get("name"))}</div>')
+    d1 = fmt_date(t.get('date_from')); d2 = fmt_date(t.get('date_to') or t.get('date_from'))
+    h.append(f'<div style="text-align:center;">{esc(d1)} — {esc(d2) if d2 != d1 else ""}</div>')
+    if t.get('venue'):
+        h.append(f'<div style="text-align:center;">Место проведения: {esc(t.get("venue"))}</div>')
+    h.append('<hr>')
+    h.append('<div style="font-weight:bold;">ГЛАВНАЯ СУДЕЙСКАЯ КОЛЛЕГИЯ</div>')
+    h.append(f'<div>Главный судья: <b>{esc(t.get("chief_referee") or "—")}</b></div>')
+    h.append(f'<div>Главный секретарь: <b>{esc(t.get("chief_secretary") or "—")}</b></div>')
+    h.append('<hr>')
+    h.append('<div style="font-weight:bold;">РЕГЛАМЕНТ СОРЕВНОВАНИЙ</div>')
+    h.append('<table style="border-collapse:collapse;width:100%;font-size:12px;" border="1" cellpadding="4"><tr><th>Вес.катег.</th><th>Уч-ков</th><th>Боев</th></tr>')
+    for wc in order:
+        cnt = len(groups[wc])
+        fights = 0
+        if groups[wc]:
+            fights = sum(len(rd) for rd in _build_weight_rounds(groups[wc], results)[0])
+        h.append(f'<tr><td>{esc(wc)}</td><td>{cnt}</td><td>{fights}</td></tr>')
+    h.append('</table>')
+    h.append('<div style="font-weight:bold;margin-top:6px;">СПИСОК УЧАСТНИКОВ ПО ВЕСОВЫМ КАТЕГОРИЯМ</div>')
+    for wc in order:
+        h.append(f'<div style="margin-top:4px;"><b>{esc(wc)}</b></div>')
+        h.append('<table style="border-collapse:collapse;width:100%;font-size:12px;" border="1" cellpadding="4"><tr><th>ФИО</th><th>Год</th><th>Вес</th><th>Регион</th></tr>')
+        for sl in groups[wc]:
+            a = id2.get(sl['athlete_id'])
+            h.append(f'<tr><td>{esc(a["name"] if a else sl["athlete_id"])}</td><td>{esc(a["birth_year"] if a else "")}</td><td>{esc(a["weight"] if a else "")}</td><td>{esc(a["region"] if a else "")}</td></tr>')
+        h.append('</table>')
+    h.append('<div style="font-weight:bold;margin-top:6px;">ПРОТОКОЛ ПОБЕДИТЕЛЕЙ И ПРИЗЁРОВ</div>')
+    for wc in order:
+        rounds, ch, sir, brs = _build_weight_rounds(groups[wc], results)
+        def nm(i): return (id2[i]['name'] if i in id2 else str(i))
+        h.append(f'<div style="margin-top:4px;"><b>{esc(wc)}</b></div>')
+        if ch: h.append(f'<div style="margin-left:10px;">🥇 1 место — {esc(nm(ch))}</div>')
+        if sir: h.append(f'<div style="margin-left:10px;">🥈 2 место — {esc(nm(sir))}</div>')
+        for b in brs: h.append(f'<div style="margin-left:10px;">🥉 3 место — {esc(nm(b))}</div>')
+    return jsonify({'title': 'Предпросмотр отчёта главного судьи', 'html': ''.join(h)})
+
+
+def _fid_act(v):
+    """ID из объекта слота или числа."""
+    return v['athlete_id'] if isinstance(v, dict) and 'athlete_id' in v else v
+
+
+def _build_weight_rounds(slots, results, step=5.0):
+    """Строит раунды и определяет призёров для одной весовой категории.
+
+    Возвращает (rounds, champion_id, silver_id, [bronze_ids], names).
+    rounds = список раундов; each раунд = список (a1_id, a2_id, winner_id, method).
+    """
+    # результаты по индексу пары
+    results_by_key = {}
+    for r in (results or []):
+        results_by_key[(r['weight_class'], r['pair_index'])] = r
+
+    rounds = []
+    fr = []
+    pidx = 0
+    for i in range(0, len(slots) - 1, 2):
+        a1 = slots[i]; a2 = slots[i + 1]
+        r = results_by_key.get((a1['weight_class'], pidx))
+        fr.append((_fid_act(a1), _fid_act(a2), r['winner_id'] if r else None, (r['method'] if r else '')))
+        pidx += 1
+    if len(slots) % 2 != 0:
+        a1 = slots[-1]
+        fr.append((_fid_act(a1), None, None, ''))  # ожидает соперника — не авто-победитель
+    rounds.append(fr)
+
+    round_num = 1
+    while True:
+        prev = rounds[-1]
+        winners = [f[2] for f in prev]
+        if any(w is None for w in winners) or len(winners) <= 1:
+            break
+        round_num += 1
+        offset = (round_num - 1) * 1000
+        nxt = []
+        for i in range(0, len(winners) - 1, 2):
+            a1 = winners[i]; a2 = winners[i + 1]
+            r = results_by_key.get((slots[0]['weight_class'], offset + i))
+            nxt.append((a1, a2, r['winner_id'] if r else None, (r['method'] if r else '')))
+        if not nxt:
+            break
+        rounds.append(nxt)
+
+    wc = slots[0]['weight_class']
+    champion = None; silver = None; bronzes = []
+    top = rounds[-1]
+    any_unresolved = any((f[1] is not None and f[2] is None) for rd in rounds for f in rd)
+    top_winner = None
+    if not any_unresolved and len(top) == 1 and top[0][2] is not None:
+        top_winner = top[0][2]
+    champion = top_winner
+    if champion is not None and len(top) == 1 and top[0][1] is not None:
+        silver = top[0][0] if top[0][2] == top[0][1] else top[0][1]
+    if len(rounds) >= 2:
+        semi = rounds[-2]
+        for f in semi:
+            if f[1] is None or f[2] is None:
+                continue
+            loser = f[1] if f[2] == f[0] else f[0]
+            if loser is not None and loser != champion and len(bronzes) < 2:
+                bronzes.append(loser)
+    return rounds, champion, silver, bronzes
+
+
+@app.route('/api/report/<int:tournament_id>', methods=['GET'])
+def report_docx(tournament_id):
+    """Сформировать отчёт главного судьи на основе ogl-template.docx.
+
+    Колонтитулы, заголовки, стили и таблицы шаблона сохраняются как есть;
+    заполняются только места с плейсхолдерами данными из приложения:
+    {TITLE}, {DATES}, {CITY}, {VENUE}, {REFEREE}, {SECRETARY}, число участников.
+    """
+    if not _HAS_DOCX:
+        return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
+    from io import BytesIO
+
+    conn = get_db()
+    t = row_to_dict(conn.execute("SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
+    if t is None:
+        conn.close()
+        return jsonify({'error': 'Соревнование не найдено'}), 404
+
+    # Подсчёт участников
+    n = conn.execute("SELECT COUNT(*) c FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchone()['c'] or 0
+    conn.close()
+
+    # Найти шаблон
+    tmpl = None
+    for cand in (os.path.join(PROJECT_DIR, 'ogl_template.docx'),
+                 os.path.join(ASSETS_DIR, 'ogl_template.docx'),
+                 os.path.join(_get_data_dir(), 'ogl_template.docx')):
+        if os.path.exists(cand):
+            tmpl = cand
+            break
+    if not tmpl:
+        return jsonify({'error': 'Шаблон отчёта (ogl_template.docx) не найден'}), 500
+
+    doc = Document(tmpl)   # открываем сам шаблон — тело/колонтитулы сохраняются
+
+    # Данные из приложения для таблиц отчёта
+    import re as _re
+    from collections import defaultdict as _dd
+    _conn2 = get_db()
+    _ath_ids = [r['athlete_id'] for r in _conn2.execute(
+        "SELECT athlete_id FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchall()]
+    _athletes = []
+    if _ath_ids:
+        _ph = ','.join('?' * len(_ath_ids))
+        _athletes = rows_to_list(_conn2.execute(f"SELECT * FROM athletes WHERE id IN ({_ph})", _ath_ids).fetchall())
+    _lottery = rows_to_list(_conn2.execute(
+        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+    _results = rows_to_list(_conn2.execute(
+        "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
+    _conn2.close()
+    _groups = _dd(list); _worder = []
+    for _s in _lottery:
+        if _s['weight_class'] not in _groups:
+            _worder.append(_s['weight_class'])
+        _groups[_s['weight_class']].append(_s)
+    for _wc in _groups:
+        _groups[_wc].sort(key=lambda x: x['slot'])
+    _worder.sort(key=lambda wc: float((_re.search(r'(\d+(?:\.\d+)?)', wc or '') or _re.search(r'0',''))[1] or 0))
+
+    def _fmt_date(s):
+        p = (s or '').split('-')
+        return f'{p[2]}.{p[1]}.{p[0]}' if len(p) == 3 else (s or '').replace('-', '.')
+
+    d1 = _fmt_date(t.get('date_from') or '')
+    d2 = _fmt_date(t.get('date_to') or t.get('date_from') or '')
+    dates = f'{d1} — {d2}' if d2 and d2 != d1 else d1
+    title = t.get('name') or ''
+    city = t.get('venue') or ''
+    ref = t.get('chief_referee') or ''
+    sec = t.get('chief_secretary') or ''
+
+    # Замена плейсхолдера по всему абзацу (склейка ранов — Word дробит текст произвольно)
+    def para_replace(para, old, new):
+        text = ''.join(r.text for r in para.runs)
+        if old not in text:
+            return False
+        merged = text.replace(old, new)
+        if para.runs:
+            para.runs[0].text = merged
+            for r in para.runs[1:]:
+                r.text = ''
+        return True
+
+    def fill_para(para):
+        para_replace(para, '_145_', str(n))
+        para_replace(para, '{TITLE}', title or '____')
+        para_replace(para, '{DATES}', dates)
+        para_replace(para, 'г. {CITY}', ('г. ' + city) if city else 'г. ____')
+        para_replace(para, '{CITY}', city or '____')
+        para_replace(para, '{VENUE}', city or '')
+
+    def fill_cell(cell):
+        for p in cell.paragraphs:
+            fill_para(p)
+
+    for para in doc.paragraphs:
+        fill_para(para)
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            for cell in row.cells:
+                fill_cell(cell)
+
+    # Надёжно заполняем главного судью/секретаря в первой таблице (судейская коллегия)
+    try:
+        _t0 = doc.tables[0]
+        for _r in _t0.rows:
+            _j = ' '.join(x.text for x in _r.cells)
+            if 'Главный судья' in _j and len(_r.cells) > 1:
+                _r.cells[1].text = ref or '________'
+            elif 'Главный секретарь' in _j and len(_r.cells) > 1:
+                _r.cells[1].text = sec or '________'
+    except Exception:
+        pass
+
+    # Заполняем таблицу «РЕГЛАМЕНТ СОРЕВНОВАНИЙ» данными из приложения
+    try:
+        _reg = None
+        for _tbl in doc.tables:
+            if 'Кол-во уч-ков' in _tbl.rows[0].cells[1].text and 'Кол-во боёв' in ' '.join(x.text for x in _tbl.rows[0].cells):
+                _reg = _tbl
+                break
+        if _reg is not None and len(_reg.rows) > 0:
+            # удалить старые строки данных (кроме шапки)
+            _rows_to_del = list(_reg.rows[1:])
+            for _r in _rows_to_del:
+                _reg._tbl.remove(_r._tr)
+            # добавить строки из данных
+            for _wc in _worder:
+                _cnt = len(_groups[_wc])
+                _fights = 0
+                if _groups[_wc]:
+                    _rounds = _build_weight_rounds(_groups[_wc], _results)[0]
+                    _fights = sum(len(rd) for rd in _rounds)
+                _cells = _reg.add_row().cells
+                _cells[0].text = _wc
+                _cells[1].text = str(_cnt)
+                if len(_cells) > 2:
+                    _cells[2].text = ''
+                if len(_cells) > 3:
+                    _cells[3].text = ''
+                if len(_cells) > 4:
+                    _cells[4].text = ''
+                if len(_cells) > 5:
+                    _cells[5].text = str(_fights)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True,
+                     download_name=f"otchet_glavnogo_sudi_{tournament_id}.docx",
+                     mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
 
 # ======================== СТАТИЧЕСКИЕ ФАЙЛЫ ========================
