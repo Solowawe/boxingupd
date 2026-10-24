@@ -256,23 +256,9 @@ const App = {
         }
     },
 
+    // Предпросмотр отчёта — открывает сформированный .docx в новой вкладке (Word)
     openReportPreview(tournamentId) {
-        const m = document.getElementById('preview-modal');
-        if (!m) return;
-        const body = document.getElementById('preview-modal-body');
-        document.getElementById('preview-modal-title').textContent = 'Загрузка предпросмотра…';
-        body.innerHTML = '⏳ Загрузка…';
-        m.style.display = 'block';
-        fetch(`/api/report/${tournamentId}/preview`)
-            .then(r => r.json())
-            .then(d => {
-                if (d.error) { body.innerHTML = '<div style="color:#ff6b6b;">Ошибка: ' + (d.error||'') + '</div>'; }
-                else {
-                    document.getElementById('preview-modal-title').textContent = d.title || 'Предпросмотр отчёта';
-                    body.innerHTML = d.html || '';
-                }
-            })
-            .catch(e => { body.innerHTML = '<div style="color:#ff6b6b;">Ошибка: ' + e.message + '</div>'; });
+        window.open(`/api/report/${tournamentId}`, '_blank');
     },
     closePreview() {
         const m = document.getElementById('preview-modal');
