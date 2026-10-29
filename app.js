@@ -256,10 +256,21 @@ const App = {
         }
     },
 
-    // Предпросмотр отчёта — открывает сформированный .docx в новой вкладке (Word)
+    // Предпросмотр отчёта — открывается во вкладке браузера сразу в формате .docx
     openReportPreview(tournamentId) {
         window.open(`/api/report/${tournamentId}`, '_blank');
     },
+
+    // Предпросмотр отчёта в формате PDF (конвертация через LibreOffice).
+    openReportPreviewPdf(tournamentId) {
+        window.open(`/api/report/${tournamentId}/preview`, '_blank');
+    },
+
+    // Скачать «Состав пар» — формируется из сетки/жеребьёвки по шаблону sp_tmp.docx
+    downloadPairs(tournamentId) {
+        window.open(`/api/report/${tournamentId}/sostav-par`, '_blank');
+    },
+
     closePreview() {
         const m = document.getElementById('preview-modal');
         if (m) m.style.display = 'none';
@@ -702,13 +713,15 @@ async openAbout() {
 
                     // Загружаем спортсменов для обновления выпадающего списка
                     const athletes = await API.getAthletes();
-                    athleteSelect.innerHTML = '<option value="">-- Выберите спортсмена --</option>';
-                    athletes.forEach(a => {
-                        const opt = document.createElement('option');
-                        opt.value = a.id;
-                        opt.textContent = `${a.name} (${a.weight} кг, ${a.gender})`;
-                        athleteSelect.appendChild(opt);
-                    });
+                    if (athleteSelect) {
+                        athleteSelect.innerHTML = '<option value="">-- Выберите спортсмена --</option>';
+                        athletes.forEach(a => {
+                            const opt = document.createElement('option');
+                            opt.value = a.id;
+                            opt.textContent = `${a.name} (${a.weight} кг, ${a.gender})`;
+                            athleteSelect.appendChild(opt);
+                        });
+                    }
 
                     await this.renderParticipants();
                     await this.renderTournaments();
@@ -1042,6 +1055,11 @@ async openAbout() {
         toast('📄 Отчёт главного судьи формируется…', 'info', 3000);
     },
 
+    openReportInNewTab(tournamentId) {
+        const url = `/api/report/${tournamentId}`;
+        window.open(url, '_blank');
+    },
+
     // Печать результатов текущего соревнования
     async printResults() {
         this.switchTab('results');
@@ -1136,9 +1154,10 @@ async openAbout() {
 
             const tbody = document.getElementById('athletes-list');
             const count = document.getElementById('athletes-count');
+            if (!tbody) return; // вкладка «Спортсмены» может отсутствовать в интерфейсе
 
             tbody.innerHTML = '';
-            count.textContent = `Всего спортсменов: ${athletes.length}`;
+            if (count) count.textContent = `Всего спортсменов: ${athletes.length}`;
 
             if (athletes.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Спортсмены не найдены</td></tr>';
@@ -1867,7 +1886,7 @@ setupExport() {
                         <button class="btn-secondary" onclick="App.exportTournamentToExcel(${t.id})">📊 Excel</button>
                         <button class="btn-secondary" onclick="App.exportProtocolToExcel(${t.id})">📤 Протокол</button>
                         <button class="btn-secondary" onclick="App.downloadJudgeReport(${t.id})">📄 Отчёт гл. судьи</button>
-                        <button class="btn-secondary" onclick="App.openReportPreview(${t.id})">👁 Предпросмотр</button>
+                        <button class="btn-secondary" onclick="App.downloadPairs(${t.id})">🤼 Состав пар</button>
                         <button class="btn-secondary" style="color: #ff6b6b;" onclick="App.clearParticipants(${t.id})">🗑 Очистить участников</button>
                         <button class="btn-secondary" onclick="App.deleteTournament(${t.id})">❌ Удалить соревнование</button>
                     </div>

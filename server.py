@@ -110,6 +110,27 @@ if getattr(sys, 'frozen', False):
                 shutil.copy2(_src, _dst)
             except Exception:
                 pass
+    # Шаблоны отчётов тоже копируем в каталог данных (для переносной версии —
+    # в папку рядом с exe), чтобы их можно было редактировать/заменять.
+    # При обновлении версии (встроенная новее сохранённой) — перезаписываем шаблоны,
+    # чтобы старые/повреждённые копии не оставались после апдейта.
+    for _f in ('ogl_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx'):
+        _src = os.path.join(_bundled, _f)
+        _dst = os.path.join(DATA_DIR, _f)
+        if not os.path.exists(_src):
+            continue
+        _need_tpl = False
+        if not os.path.exists(_dst):
+            _need_tpl = True
+        else:
+            # перезапишем, если встроенная версия новее сохранённой (для .docx по update-manifest)
+            _dm = _read_json_version(os.path.join(DATA_DIR, 'update-manifest.json'))
+            _need_tpl = _ver_tuple(_bm) > _ver_tuple(_dm)
+        if _need_tpl:
+            try:
+                shutil.copy2(_src, _dst)
+            except Exception:
+                pass
     ASSETS_DIR = DATA_DIR
 else:
     ASSETS_DIR = PROJECT_DIR
@@ -1648,85 +1669,133 @@ def import_docx():
     return jsonify({'imported': len(imported), 'errors': len(errors), 'ids': new_ids, 'skipped': skipped, 'errorlist': errors[:20]})
 
 
-# ======================== API: ОТЧЁТ ГЛАВНОГО СУДЬИ (.docx) ========================
+    # ======================== API: ОТЧЁТ ГЛАВНОГО СУДЬИ (PDF) ========================
 
 @app.route('/api/report/<int:tournament_id>/preview', methods=['GET'])
 def report_preview(tournament_id):
-    """HTML-предпросмотр отчёта главного судьи данными из приложения."""
-    from collections import defaultdict as DD
-    import re as RE
-    conn = get_db()
-    t = row_to_dict(conn.execute("SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
-    if t is None:
-        conn.close()
-        return jsonify({'error': 'Соревнование не найдено'}), 404
-    ath_ids = [r['athlete_id'] for r in conn.execute(
-        "SELECT athlete_id FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchall()]
-    athletes = []
-    if ath_ids:
-        ph = ','.join('?' * len(ath_ids))
-        athletes = rows_to_list(conn.execute(f"SELECT * FROM athletes WHERE id IN ({ph})", ath_ids).fetchall())
-    lottery = rows_to_list(conn.execute(
-        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
-    results = rows_to_list(conn.execute(
-        "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
-    conn.close()
+    """Сформировать отчёт на основе шаблона ogl_tmp.docx, сконвертировать в PDF
+    и вернуть HTML-предпросмотр (embed) для отображения в браузере без скачивания."""
+    import io
+    import base64
+    from collections import defaultdict as _dd
+    import re as _re
 
-    groups = DD(list); order = []
-    for s in lottery:
-        if s['weight_class'] not in groups:
-            order.append(s['weight_class'])
-        groups[s['weight_class']].append(s)
-    for wc in groups:
-        groups[wc].sort(key=lambda x: x['slot'])
-    order.sort(key=lambda wc: float((RE.search(r'(\d+(?:\.\d+)?)', wc or '') or RE.search(r'0',''))[1] or 0))
-    id2 = {a['id']: a for a in athletes}
+    if not _HAS_DOCX:
+        return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
 
-    def esc(x):
-        return str(x or '').replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+    # Найти шаблон ogl_tmp.docx
+    tmpl = None
+    for cand in (os.path.join(PROJECT_DIR, 'ogl_tmp.docx'),
+                 os.path.join(ASSETS_DIR, 'ogl_tmp.docx'),
+                 os.path.join(_get_data_dir(), 'ogl_tmp.docx')):
+        if os.path.exists(cand):
+            tmpl = cand
+            break
+    if not tmpl:
+        return jsonify({'error': 'Шаблон отчёта (ogl_tmp.docx) не найден'}), 500
 
-    def fmt_date(s):
-        p = (s or '').split('-')
-        return f'{p[2]}.{p[1]}.{p[0]}' if len(p) == 3 else (s or '')
+    doc = _build_report_document(tournament_id, tmpl)
+    if isinstance(doc, tuple):  # (json, status)
+        return doc
 
-    h = []
-    h.append('<div style="text-align:center;font-weight:bold;font-size:16px;">ОТЧЁТ ГЛАВНОГО СУДЬИ</div>')
-    h.append(f'<div style="text-align:center;font-weight:bold;font-size:14px;">{esc(t.get("name"))}</div>')
-    d1 = fmt_date(t.get('date_from')); d2 = fmt_date(t.get('date_to') or t.get('date_from'))
-    h.append(f'<div style="text-align:center;">{esc(d1)} — {esc(d2) if d2 != d1 else ""}</div>')
-    if t.get('venue'):
-        h.append(f'<div style="text-align:center;">Место проведения: {esc(t.get("venue"))}</div>')
-    h.append('<hr>')
-    h.append('<div style="font-weight:bold;">ГЛАВНАЯ СУДЕЙСКАЯ КОЛЛЕГИЯ</div>')
-    h.append(f'<div>Главный судья: <b>{esc(t.get("chief_referee") or "—")}</b></div>')
-    h.append(f'<div>Главный секретарь: <b>{esc(t.get("chief_secretary") or "—")}</b></div>')
-    h.append('<hr>')
-    h.append('<div style="font-weight:bold;">РЕГЛАМЕНТ СОРЕВНОВАНИЙ</div>')
-    h.append('<table style="border-collapse:collapse;width:100%;font-size:12px;" border="1" cellpadding="4"><tr><th>Вес.катег.</th><th>Уч-ков</th><th>Боев</th></tr>')
-    for wc in order:
-        cnt = len(groups[wc])
-        fights = 0
-        if groups[wc]:
-            fights = sum(len(rd) for rd in _build_weight_rounds(groups[wc], results)[0])
-        h.append(f'<tr><td>{esc(wc)}</td><td>{cnt}</td><td>{fights}</td></tr>')
-    h.append('</table>')
-    h.append('<div style="font-weight:bold;margin-top:6px;">СПИСОК УЧАСТНИКОВ ПО ВЕСОВЫМ КАТЕГОРИЯМ</div>')
-    for wc in order:
-        h.append(f'<div style="margin-top:4px;"><b>{esc(wc)}</b></div>')
-        h.append('<table style="border-collapse:collapse;width:100%;font-size:12px;" border="1" cellpadding="4"><tr><th>ФИО</th><th>Год</th><th>Вес</th><th>Регион</th></tr>')
-        for sl in groups[wc]:
-            a = id2.get(sl['athlete_id'])
-            h.append(f'<tr><td>{esc(a["name"] if a else sl["athlete_id"])}</td><td>{esc(a["birth_year"] if a else "")}</td><td>{esc(a["weight"] if a else "")}</td><td>{esc(a["region"] if a else "")}</td></tr>')
-        h.append('</table>')
-    h.append('<div style="font-weight:bold;margin-top:6px;">ПРОТОКОЛ ПОБЕДИТЕЛЕЙ И ПРИЗЁРОВ</div>')
-    for wc in order:
-        rounds, ch, sir, brs = _build_weight_rounds(groups[wc], results)
-        def nm(i): return (id2[i]['name'] if i in id2 else str(i))
-        h.append(f'<div style="margin-top:4px;"><b>{esc(wc)}</b></div>')
-        if ch: h.append(f'<div style="margin-left:10px;">🥇 1 место — {esc(nm(ch))}</div>')
-        if sir: h.append(f'<div style="margin-left:10px;">🥈 2 место — {esc(nm(sir))}</div>')
-        for b in brs: h.append(f'<div style="margin-left:10px;">🥉 3 место — {esc(nm(b))}</div>')
-    return jsonify({'title': 'Предпросмотр отчёта главного судьи', 'html': ''.join(h)})
+    # === КОНВЕРТАЦИЯ .docx -> PDF ===
+    try:
+        # Сначала пробуем LibreOffice CLI (лучшее качество/точность сохранения шаблона)
+        import subprocess, tempfile, os as _os
+        _tmp_docx = tempfile.NamedTemporaryFile(delete=False, suffix='.docx', prefix='report_').name
+        doc.save(_tmp_docx)
+
+        soffice = None
+        for cand in (os.environ.get('SOFFICE_PATH'),
+                     'soffice', 'libreoffice', 'libreoffice.exe',
+                     r'C:\Program Files\LibreOffice\program\soffice.exe',
+                     r'C:\Program Files (x86)\LibreOffice\program\soffice.exe'):
+            if cand:
+                p = cand
+                try:
+                    import shutil as _sh
+                    if not _sh.which(p) and not _os.path.exists(p):
+                        continue
+                except Exception:
+                    continue
+                soffice = p
+                break
+
+        if soffice:
+            _out_dir = tempfile.mkdtemp(prefix='report_pdf_')
+            try:
+                subprocess.run([soffice, '--headless', '--convert-to', 'pdf', '--outdir',
+                                _out_dir, _tmp_docx],
+                               check=True, capture_output=True, timeout=120)
+                _pdf_path = _os.path.join(_out_dir,
+                    _os.path.splitext(_os.path.basename(_tmp_docx))[0] + '.pdf')
+                if _os.path.exists(_pdf_path):
+                    with open(_pdf_path, 'rb') as f:
+                        pdf_bytes = f.read()
+                    _os.unlink(_tmp_docx)
+                    import shutil as _shd
+                    _shd.rmtree(_out_dir, ignore_errors=True)
+                    return _pdf_preview_response(pdf_bytes, tournament_id)
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                # fallback ниже
+                try:
+                    _os.unlink(_tmp_docx)
+                except Exception:
+                    pass
+    except Exception:
+        import traceback; traceback.print_exc()
+
+    # Важная уборка temp-файла и сообщение об ошибке, если конвертация не удалась
+    try:
+        _os.unlink(_tmp_docx)
+    except Exception:
+        pass
+    return jsonify({'error': 'Не удалось конвертировать отчёт в PDF. Установите LibreOffice (soffice.exe) и добавьте его в PATH или задайте переменную окружения SOFFICE_PATH.'}), 500
+
+
+def _pdf_preview_response(pdf_bytes, tournament_id):
+    """Оборачивает байты PDF в полноценную HTML-страницу с embed
+    (предпросмотр без скачивания). Возвращается напрямую как text/html,
+    чтобы открываться во вкладке браузера, а не в окне приложения."""
+    import base64
+    from flask import Response
+    pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+    preview_html = f'''
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head><meta charset="utf-8"><title>Предпросмотр отчёта</title></head>
+    <body style="margin:0;padding:20px;background:#f5f5f5;font-family:Arial,sans-serif;">
+        <div style="text-align:center;margin-bottom:15px;">
+            <h2 style="margin:0 0 10px 0;">Предпросмотр отчёта</h2>
+            <button onclick="window.print()" style="padding:8px 16px;cursor:pointer;">Печать PDF</button>
+            <button onclick="downloadPdf()" style="padding:8px 16px;margin-left:10px;cursor:pointer;">Скачать PDF</button>
+            <button onclick="window.close()" style="padding:8px 16px;margin-left:10px;cursor:pointer;">Закрыть</button>
+        </div>
+        <embed src="data:application/pdf;base64,{pdf_base64}"
+               type="application/pdf"
+               width="100%"
+               height="800px"
+               style="border:1px solid #ccc;background:#fff;">
+    </body>
+    <script>
+        function downloadPdf() {{
+            const b64 = '{pdf_base64}';
+            const byteChars = atob(b64);
+            const byteNums = new Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) {{
+                byteNums[i] = byteChars.charCodeAt(i);
+            }}
+            const arr = new Uint8Array(byteNums);
+            const blob = new Blob([arr], {{type: 'application/pdf'}});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'otchet_glavnogo_sudi_{tournament_id}.pdf';
+            a.click();
+        }}
+    </script>
+    '''
+    return Response(preview_html, mimetype='text/html')
 
 
 def _fid_act(v):
@@ -1796,69 +1865,55 @@ def _build_weight_rounds(slots, results, step=5.0):
     return rounds, champion, silver, bronzes
 
 
-@app.route('/api/report/<int:tournament_id>', methods=['GET'])
-def report_docx(tournament_id):
-    """Сформировать отчёт главного судьи на основе ogl-template.docx.
+def _build_report_document(tournament_id, tmpl):
+    """Собирает отчёт из шаблона ogl_tmp.docx и данных приложения.
 
-    Колонтитулы, заголовки, стили и таблицы шаблона сохраняются как есть;
-    заполняются только места с плейсхолдерами данными из приложения:
-    {TITLE}, {DATES}, {CITY}, {VENUE}, {REFEREE}, {SECRETARY}, число участников.
+    Возвращает объект Document (python-docx) или кортеж (jsonify-ответ, status).
+    Заполняет плейсхолдеры ({TITLE}, {DATE}, {DATES}, {CITY}, {VENUE},
+    {REFEREE}, {SECRETARY}, _145_ = число участников) по всему телу,
+    таблицам и колонтитулам; затем синхронизирует таблицы протоколов:
+      - Регламент соревнований (кол-во участников и боёв по категориям);
+      - Протоколы победителей и призёров по категориям;
+      - Заголовки-подзаголовки протоколов (название турнира).
     """
-    if not _HAS_DOCX:
-        return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
-    from io import BytesIO
+    import re as _re
+    import copy as _copy
+    from collections import defaultdict as _dd
+    from docx.oxml import parse_xml as _parse_xml
 
     conn = get_db()
     t = row_to_dict(conn.execute("SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
     if t is None:
         conn.close()
-        return jsonify({'error': 'Соревнование не найдено'}), 404
+        return (jsonify({'error': 'Соревнование не найдено'}), 404)
 
-    # Подсчёт участников
     n = conn.execute("SELECT COUNT(*) c FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchone()['c'] or 0
+    ath_ids = [r['athlete_id'] for r in conn.execute(
+        "SELECT athlete_id FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchall()]
+    athletes = []
+    if ath_ids:
+        _ph = ','.join('?' * len(ath_ids))
+        athletes = rows_to_list(conn.execute(f"SELECT * FROM athletes WHERE id IN ({_ph})", ath_ids).fetchall())
+    lottery = rows_to_list(conn.execute(
+        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+    results = rows_to_list(conn.execute(
+        "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
     conn.close()
 
-    # Найти шаблон
-    tmpl = None
-    for cand in (os.path.join(PROJECT_DIR, 'ogl_template.docx'),
-                 os.path.join(ASSETS_DIR, 'ogl_template.docx'),
-                 os.path.join(_get_data_dir(), 'ogl_template.docx')):
-        if os.path.exists(cand):
-            tmpl = cand
-            break
-    if not tmpl:
-        return jsonify({'error': 'Шаблон отчёта (ogl_template.docx) не найден'}), 500
+    doc = Document(tmpl)
 
-    doc = Document(tmpl)   # открываем сам шаблон — тело/колонтитулы сохраняются
-
-    # Данные из приложения для таблиц отчёта
-    import re as _re
-    from collections import defaultdict as _dd
-    _conn2 = get_db()
-    _ath_ids = [r['athlete_id'] for r in _conn2.execute(
-        "SELECT athlete_id FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchall()]
-    _athletes = []
-    if _ath_ids:
-        _ph = ','.join('?' * len(_ath_ids))
-        _athletes = rows_to_list(_conn2.execute(f"SELECT * FROM athletes WHERE id IN ({_ph})", _ath_ids).fetchall())
-    _lottery = rows_to_list(_conn2.execute(
-        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
-    _results = rows_to_list(_conn2.execute(
-        "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
-    _conn2.close()
-    _groups = _dd(list); _worder = []
-    for _s in _lottery:
-        if _s['weight_class'] not in _groups:
-            _worder.append(_s['weight_class'])
-        _groups[_s['weight_class']].append(_s)
-    for _wc in _groups:
-        _groups[_wc].sort(key=lambda x: x['slot'])
-    _worder.sort(key=lambda wc: float((_re.search(r'(\d+(?:\.\d+)?)', wc or '') or _re.search(r'0',''))[1] or 0))
+    groups = _dd(list); order = []
+    for s in lottery:
+        if s['weight_class'] not in groups:
+            order.append(s['weight_class'])
+        groups[s['weight_class']].append(s)
+    for wc in groups:
+        groups[wc].sort(key=lambda x: x['slot'])
+    order.sort(key=lambda wc: float((_re.search(r'(\d+(?:\.\d+)?)', wc or '') or _re.search(r'0', ''))[1] or 0))
 
     def _fmt_date(s):
         p = (s or '').split('-')
         return f'{p[2]}.{p[1]}.{p[0]}' if len(p) == 3 else (s or '').replace('-', '.')
-
     d1 = _fmt_date(t.get('date_from') or '')
     d2 = _fmt_date(t.get('date_to') or t.get('date_from') or '')
     dates = f'{d1} — {d2}' if d2 and d2 != d1 else d1
@@ -1867,7 +1922,9 @@ def report_docx(tournament_id):
     ref = t.get('chief_referee') or ''
     sec = t.get('chief_secretary') or ''
 
-    # Замена плейсхолдера по всему абзацу (склейка ранов — Word дробит текст произвольно)
+    # Карта спортсменов: id -> athlete
+    by_id = {a['id']: a for a in athletes}
+
     def para_replace(para, old, new):
         text = ''.join(r.text for r in para.runs)
         if old not in text:
@@ -1883,9 +1940,12 @@ def report_docx(tournament_id):
         para_replace(para, '_145_', str(n))
         para_replace(para, '{TITLE}', title or '____')
         para_replace(para, '{DATES}', dates)
+        para_replace(para, '{DATE}', d1)
         para_replace(para, 'г. {CITY}', ('г. ' + city) if city else 'г. ____')
         para_replace(para, '{CITY}', city or '____')
         para_replace(para, '{VENUE}', city or '')
+        para_replace(para, '{REFEREE}', ref or '________')
+        para_replace(para, '{SECRETARY}', sec or '________')
 
     def fill_cell(cell):
         for p in cell.paragraphs:
@@ -1898,7 +1958,20 @@ def report_docx(tournament_id):
             for cell in row.cells:
                 fill_cell(cell)
 
-    # Надёжно заполняем главного судью/секретаря в первой таблице (судейская коллегия)
+    # Колонтитулы
+    for section in doc.sections:
+        for hf in (section.header, section.footer, section.first_page_header, section.first_page_footer):
+            try:
+                for p in hf.paragraphs:
+                    fill_para(p)
+                for tbl in hf.tables:
+                    for row in tbl.rows:
+                        for cell in row.cells:
+                            fill_cell(cell)
+            except Exception:
+                pass
+
+    # Главный судья/секретарь в первой таблице (судейская коллегия)
     try:
         _t0 = doc.tables[0]
         for _r in _t0.rows:
@@ -1910,44 +1983,991 @@ def report_docx(tournament_id):
     except Exception:
         pass
 
-    # Заполняем таблицу «РЕГЛАМЕНТ СОРЕВНОВАНИЙ» данными из приложения
+    # --- Заголовки протоколов: подзаголовки возрастных групп -> название турнира ---
+    # Строки вида «ДЕВОЧКИ 2014-2015гг.р.» / «ЮНОШИ 2016г.р.» обновляются названием турнира,
+    # чтобы в шапках протоколов фигурировало актуальное название соревнования.
+    for para in doc.paragraphs:
+        tx = para.text.strip()
+        if _re.match(r'^[А-ЯЁ\s]+(?:\d{4}[-–]\d{4}|\d{4})г{0,1}\.{0,1}р\.?\s*$', tx) and 'ПРОТОКОЛ' not in tx and title:
+            para_replace(para, tx, title)
+
+    # --- Регламент соревнований ---
+    # Шаблон содержит: строка-заголовок (r0), строка-группа «Юноши {год рождения}»,
+    # строка-данных с маркерами {весизжеребьевки} {количествоизжеребьевки} {всегобоев}.
+    # Строим группы по полу (мужской→Юноши, женский→Девушки) и возрастному диапазону
+    # (непрерывные диапазоны лет); внутри каждой группы — по строке на весовую категорию.
     try:
+        from docx.oxml.ns import qn as _qn
         _reg = None
         for _tbl in doc.tables:
-            if 'Кол-во уч-ков' in _tbl.rows[0].cells[1].text and 'Кол-во боёв' in ' '.join(x.text for x in _tbl.rows[0].cells):
-                _reg = _tbl
-                break
-        if _reg is not None and len(_reg.rows) > 0:
-            # удалить старые строки данных (кроме шапки)
-            _rows_to_del = list(_reg.rows[1:])
-            for _r in _rows_to_del:
+            if len(_tbl.rows) > 0:
+                _hdr = ' '.join(c.text for c in _tbl.rows[0].cells)
+                if 'Кол-во уч-ков' in _hdr or 'Количество участников' in _hdr:
+                    if 'Кол-во боёв' in _hdr or 'боёв' in _hdr:
+                        _reg = _tbl
+                        break
+        if _reg is not None and len(_reg.rows) >= 3:
+            _group_tr = _copy.deepcopy(_reg.rows[1]._tr)   # «Юноши {год рождения}»
+            _data_tr = _copy.deepcopy(_reg.rows[2]._tr)    # {весизжеребьевки}...
+            def _reg_replace_para(para_el, mapping):
+                """Объединяет текст абзаца, заменяет маркеры целиком (маркер может быть
+                разбит на несколько w:t), результат кладёт в первый run."""
+                _runs = para_el.findall(_qn('w:r'))
+                if not _runs:
+                    return
+                _full = ''.join(_rt.text or '' for _r in _runs for _rt in _r.findall(_qn('w:t')))
+                _changed = False
+                for _k, _v in mapping.items():
+                    if _k in _full:
+                        _full = _full.replace(_k, _v)
+                        _changed = True
+                if _changed:
+                    _runs[0].findall(_qn('w:t'))[0].text = _full if _runs[0].findall(_qn('w:t')) else None
+                    if _runs[0].findall(_qn('w:t')):
+                        _runs[0].findall(_qn('w:t'))[0].text = _full
+                        for _r in _runs[1:]:
+                            for _rt in _r.findall(_qn('w:t')):
+                                _rt.text = ''
+
+            def _reg_markers_in_el(el, mapping):
+                for _p in el.iter(_qn('w:p')):
+                    _reg_replace_para(_p, mapping)
+            def _reg_cell_text(tr_el, idx):
+                tcs = tr_el.findall(_qn('w:tc'))
+                if idx < len(tcs):
+                    return ''.join(_n.text or '' for _n in tcs[idx].iter(_qn('w:t')))
+                return ''
+            # Читаем пол каждого спортсмена лота и его категории
+            def _slot_gender(slot):
+                _a = by_id.get(slot['athlete_id'])
+                if not _a:
+                    return None
+                _g = (_a.get('gender') or '').strip()
+                # нормализуем: мужской/муж/м → 'мужской', женский/жен/ж → 'женский'
+                _gl = _g.lower()
+                if 'муж' in _gl or _gl in ('м', 'm', 'male'):
+                    return 'мужской'
+                if 'жен' in _gl or _gl in ('ж', 'f', 'female'):
+                    return 'женский'
+                return _g
+            def _slot_year(slot):
+                _a = by_id.get(slot['athlete_id'])
+                y = (_a.get('birth_year') if _a else None)
+                try:
+                    return int(str(y).strip())
+                except (TypeError, ValueError):
+                    return None
+
+            # --- Собираем данные по категориям ---
+            # cat = order; для каждой категории — пол (по первому лоту) и годы участников
+            _cat_gender = {}
+            _cat_years = {}
+            for _wc in order:
+                _slots = groups[_wc]
+                if not _slots:
+                    continue
+                _g = _slot_gender(_slots[0])
+                _cat_gender[_wc] = _g or ''
+                _ys = []
+                for _s in _slots:
+                    _y = _slot_year(_s)
+                    if _y is not None:
+                        _ys.append(_y)
+                _cat_years[_wc] = _ys
+
+            # --- Группы: (слово_пола, диапазон_лет) -> [категории] ---
+            # Слово пола: мужской → «Юноши», женский → «Девушки»
+            def _gender_word(g):
+                return 'Юноши' if g == 'мужской' else ('Девушки' if g == 'женский' else (g or ''))
+            def _range_label(vals):
+                if not vals:
+                    return ''
+                _ms = min(vals); _mx = max(vals)
+                return str(_ms) if _ms == _mx else f'{_ms}-{_mx}'
+            # Сначала: по каждому полу строим НЕПРЕРЫВНЫЕ диапазоны лет из всех участников.
+            # Диапазон = последовательность годов без пропусков.
+            def _continuous_ranges(years_set):
+                s = sorted(set(years_set))
+                if not s:
+                    return []
+                ranges = []
+                start = prev = s[0]
+                for y in s[1:]:
+                    if y == prev + 1:
+                        prev = y
+                    else:
+                        ranges.append((start, prev))
+                        start = prev = y
+                ranges.append((start, prev))
+                return ranges
+            # Соберём все годы по полу
+            _all_years_by_g = {}
+            for _wc in order:
+                _g = _cat_gender.get(_wc) or ''
+                for _y in (_cat_years.get(_wc) or []):
+                    _all_years_by_g.setdefault(_g, set()).add(_y)
+            # диапазоны по полу (слово пола)
+            _gender_ranges = {}   # gword -> [(y0,y1), ...]
+            for _g, _yset in _all_years_by_g.items():
+                _gender_ranges[_gender_word(_g)] = _continuous_ranges(_yset)
+            def _cat_in_range(wc, gword):
+                """Возвращает диапазон (y0,y1), в который попадают годы категории."""
+                _ys = set(_cat_years.get(wc) or [])
+                if not _ys:
+                    return (None, None)
+                for (a, b) in _gender_ranges.get(gword, []):
+                    if all(a <= y <= b for y in _ys):
+                        return (a, b)
+                # если годы не из одного диапазона — берём (min,max)
+                return (min(_ys), max(_ys))
+            _groups_map = {}   # (gword, (y0,y1)) -> [wc]
+            for _wc in order:
+                _g = _gender_word(_cat_gender.get(_wc) or '')
+                _r = _cat_in_range(_wc, _g)
+                _groups_map.setdefault((_g, _r), []).append(_wc)
+            # Сортируем группы: пол (Юноши первыми), затем по возрасту, затем по минимальному весу
+            def _gkey(item):
+                (gw, yrange), wcs = item
+                _grank = 0 if gw == 'Юноши' else (1 if gw == 'Девушки' else 2)
+                _y0 = yrange[0] if yrange and yrange[0] is not None else 10e9
+                _minw = None
+                for _wc in wcs:
+                    _m = _re.search(r'([\d.]+)', _wc or '')
+                    if _m:
+                        _v = float(_m.group(1))
+                        if _minw is None or _v < _minw:
+                            _minw = _v
+                return (_grank, _y0, _minw if _minw is not None else 10e9)
+            _groups_sorted = sorted(_groups_map.items(), key=_gkey)
+
+            # Удаляем все строки кроме заголовка
+            for _r in list(_reg.rows[1:]):
                 _reg._tbl.remove(_r._tr)
-            # добавить строки из данных
-            for _wc in _worder:
-                _cnt = len(_groups[_wc])
-                _fights = 0
-                if _groups[_wc]:
-                    _rounds = _build_weight_rounds(_groups[_wc], _results)[0]
-                    _fights = sum(len(rd) for rd in _rounds)
-                _cells = _reg.add_row().cells
-                _cells[0].text = _wc
-                _cells[1].text = str(_cnt)
-                if len(_cells) > 2:
-                    _cells[2].text = ''
-                if len(_cells) > 3:
-                    _cells[3].text = ''
-                if len(_cells) > 4:
-                    _cells[4].text = ''
-                if len(_cells) > 5:
-                    _cells[5].text = str(_fights)
+
+            # --- Вставляем группы ---
+            for (gword, yrange), wcs in _groups_sorted:
+                _g = _copy.deepcopy(_group_tr)
+                _rlabel = ''
+                if yrange and yrange[0] is not None:
+                    _rlabel = _range_label(list(yrange))
+                _reg_markers_in_el(_g, {'{год рождения}': _rlabel})
+                # заменяем слово «Юноши» на актуальное (Юноши/Девушки)
+                _g_txt = ''.join(_n.text or '' for _n in _g.iter(_qn('w:t')))
+                if gword and gword != 'Юноши':
+                    # заменим первое вхождение «Юноши» на gword
+                    for _t in _g.iter(_qn('w:t')):
+                        if _t.text and 'Юноши' in _t.text:
+                            _t.text = _t.text.replace('Юноши', gword, 1)
+                            break
+                _reg._tbl.append(_g)
+                for _wc in wcs:
+                    _cnt = len(groups[_wc])
+                    _fights = 0
+                    if groups[_wc]:
+                        _rounds = _build_weight_rounds(groups[_wc], results)[0]
+                        _fights = sum(len(rd) for rd in _rounds)
+                    _v = _re.search(r'мужской\s+([\d.,+-]+)|\s+([\d.,+-]+)\s*кг', _wc or '')
+                    _weight = _v.group(1) if _v and _v.group(1) else (_v.group(2) if _v and _v.group(2) else '')
+                    _d = _copy.deepcopy(_data_tr)
+                    _reg_markers_in_el(_d, {
+                        '{весизжеребьевки}': _weight or _wc,
+                        '{количествоизжеребьевки}': str(_cnt),
+                        '{всегобоев}': str(_fights),
+                    })
+                    _reg._tbl.append(_d)
     except Exception as e:
         import traceback; traceback.print_exc()
+
+    # --- Протоколы победителей и призёров (таблицы с первой колонкой «N место») ---
+    # В шаблоне каждая таблица призёров начинается со строки-заголовка вида «44 кг».
+    # Для каждой такой таблицы определяем весовую категорию, ищем её в данных приложения
+    # и заполняем реальными призёрами (1/2/3 место), если чемпион категории определён.
+    def _wc_find(weight_float):
+        for wc in order:
+            m = _re.search(r'(\d+(?:\.\d+)?)', wc or '')
+            if m and abs(float(m[1]) - weight_float) < 0.01:
+                return wc
+        return None
+
+    def _prizers_for(wc_key):
+        """Возвращает [(place_str, name, region), ...] для категории."""
+        g = groups.get(wc_key)
+        if not g:
+            return []
+        rounds, champion, silver, bronzes = _build_weight_rounds(g, results)
+        if champion is None:
+            return []
+        out = []
+        c = by_id.get(champion)
+        if c:
+            out.append(('1', c['name'], c.get('region') or ''))
+        if silver is not None:
+            s = by_id.get(silver)
+            if s:
+                out.append(('2', s['name'], s.get('region') or ''))
+        for b in bronzes:
+            bobj = by_id.get(b)
+            if bobj:
+                out.append(('3', bobj['name'], bobj.get('region') or ''))
+        return out
+
+    try:
+        for tbl in doc.tables:
+            cells0 = [c.text.strip() for c in tbl.rows[0].cells] if tbl.rows else []
+            if not cells0:
+                continue
+            # Таблицей призёров считаем таблицу, где в строке-заголовке есть «N кг»
+            # (и строка дублирует одну и ту же категорию по всем объединённым ячейкам).
+            wmatch = None
+            for c0 in cells0:
+                mm = _re.match(r'^\s*(\d+(?:\.\d+)?)\s*кг\s*$', c0)
+                if mm:
+                    wmatch = float(mm.group(1))
+                    break
+            if wmatch is None:
+                continue
+            # Все строки данных (кроме строки заголовка категории) удаляем всегда,
+            # чтобы не просачивались данные из шаблона по категориям, которых нет в турнире.
+            rows_to_del = list(tbl.rows[1:])
+            for r in rows_to_del:
+                tbl._tbl.remove(r._tr)
+            wc_key = _wc_find(wmatch)
+            if wc_key is None:
+                continue
+            prizes = _prizers_for(wc_key)
+            for place, name, region in prizes:
+                cells = tbl.add_row().cells
+                cells[0].text = place
+                if len(cells) > 1:
+                    cells[1].text = 'место'
+                if len(cells) > 2:
+                    cells[2].text = name
+                if len(cells) > 3:
+                    cells[3].text = ''
+                if len(cells) > 4:
+                    cells[4].text = ''
+                if len(cells) > 5:
+                    cells[5].text = region
+    except Exception as e:
+        import traceback; traceback.print_exc()
+
+    # --- Протоколы графиков: динамическая турнирная сетка по весовым категориям ---
+    # В шаблоне есть ОДНА таблица-прототип (бракет на N слотов с плейсхолдерами SLOT*).
+    # Под каждую весовую категорию с участниками строим свою таблицу-дерево:
+    # участники по слотам из жеребьёвки, победители пар и чемпион — из bracket_results.
+    from docx.oxml.ns import qn as _qn
+
+    try:
+        _WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        def _qw(tag):
+            return '{%s}%s' % (_WNS, tag)
+
+        # Находим таблицу-прототип графиков (содержит плейсхолдеры SLOT/SLOTS)
+        proto_tbl_el = None
+        for _tb in doc.element.body.iter(_qw('tbl')):
+            _txt_all = ''.join(_n.text or '' for _n in _tb.iter(_qw('t')))
+            if '{SLOT' in _txt_all or '{SLOTS' in _txt_all:
+                proto_tbl_el = _tb
+                break
+        if proto_tbl_el is not None:
+            _rows = proto_tbl_el.findall(_qw('tr'))
+            def _tc(r, i):
+                return _cells_at(r)[i]
+            def _cells_at(tr_el):
+                return tr_el.findall(_qw('tc'))
+            # Стилевые атомы из прототипа (N=4, строки 0..7, как T12)
+            _r0 = _rows[0]; _r1 = _rows[1]; _r3 = _rows[3]
+            _atoms = {
+                'num': _copy.deepcopy(_cells_at(_r0)[0]),
+                'name': _copy.deepcopy(_cells_at(_r0)[1]),
+                'club': _copy.deepcopy(_cells_at(_r1)[1]),
+                'spacer': _copy.deepcopy(_cells_at(_r1)[2]),
+                'year': _copy.deepcopy(_cells_at(_r1)[3]),
+                'winner': _copy.deepcopy(_cells_at(_r1)[4]),
+                'champ': _copy.deepcopy(_cells_at(_r3)[5]),
+            }
+            # champ должен быть жёлтым (FFFF00); champ_plain — без заливки
+            def _ensure_shd(tc, fill):
+                tcPr = tc.find(_qw('tcPr'))
+                if tcPr is None:
+                    tcPr = _parse_xml('<w:tcPr xmlns:w="%s"/>' % _WNS)
+                    tc.insert(0, tcPr)
+                shd = tcPr.find(_qw('shd'))
+                if shd is None:
+                    shd = _parse_xml('<w:shd xmlns:w="%s"/>' % _WNS)
+                    tcPr.append(shd)
+                shd.set(_qw('val'), 'clear'); shd.set(_qw('color'), 'auto'); shd.set(_qw('fill'), fill)
+            def _clear_shd(tc):
+                tcPr = tc.find(_qw('tcPr'))
+                if tcPr is not None and tcPr.find(_qw('shd')) is not None:
+                    tcPr.remove(tcPr.find(_qw('shd')))
+            _ensure_shd(_atoms['champ'], 'FFFF00')
+            _atoms['champ_plain'] = _copy.deepcopy(_atoms['champ'])
+            _clear_shd(_atoms['champ_plain'])
+
+            def _set_tc_text(tc, text):
+                ps = tc.findall(_qw('p'))
+                if not ps:
+                    p = _parse_xml('<w:p xmlns:w="%s"/>' % _WNS)
+                    tc.append(p); ps = [p]
+                p = ps[0]
+                runs = p.findall(_qw('r'))
+                if runs:
+                    r0 = runs[0]
+                    t = r0.find(_qw('t'))
+                    if t is None:
+                        t = _parse_xml('<w:t xmlns:w="%s"/>' % _WNS)
+                        r0.append(t)
+                    t.text = text
+                    for r in runs[1:]:
+                        p.remove(r)
+                else:
+                    _r = _parse_xml('<w:r xmlns:w="%s"><w:t>%s</w:t></w:r>' % (_WNS, text))
+                    p.append(_r)
+
+            def _clear_tc(tc):
+                for p in tc.findall(_qw('p')):
+                    for r in p.findall(_qw('r')):
+                        p.remove(r)
+
+            def _set_borders(tc, sides, val='single', sz='4'):
+                """sides: iterable {top,bottom,left,right} — какие границы проставить."""
+                tcPr = tc.find(_qw('tcPr'))
+                if tcPr is None:
+                    tcPr = _parse_xml('<w:tcPr xmlns:w="%s"/>' % _WNS)
+                    tc.insert(0, tcPr)
+                borders = tcPr.find(_qw('tcBorders'))
+                if borders is None:
+                    borders = _parse_xml('<w:tcBorders xmlns:w="%s"/>' % _WNS)
+                    _tn = tcPr.find(_qw('tcW'))
+                    if _tn is not None:
+                        _tn.addnext(borders)
+                    else:
+                        tcPr.append(borders)
+                for sd in sides:
+                    el = borders.find(_qw(sd))
+                    if el is None:
+                        el = _parse_xml('<w:%s xmlns:w="%s"/>' % (sd, _WNS))
+                        borders.append(el)
+                    el.set(_qw('val'), val); el.set(_qw('sz'), sz)
+                    el.set(_qw('space'), '0'); el.set(_qw('color'), 'auto')
+                for el in list(borders):
+                    sd = el.tag.split('}')[-1]
+                    if sd not in sides:
+                        borders.remove(el)
+
+            def _build_bracket(members, results_map):
+                """members: [(name, club, year), ...]; results_map: pair_index -> name."""
+                n = len(members)
+                total_slots = 2 ** math.ceil(math.log2(n)) if n > 1 else 1
+                num_rounds = int(math.log2(total_slots)) if total_slots > 1 else 1
+                champ_col = num_rounds - 1
+                m_final = 2 ** num_rounds
+                top_ws = m_final // 4 - 1 if num_rounds >= 1 else 0
+                bot_ws = m_final // 4 * 3 - 1 if num_rounds >= 1 else 0
+                grid_widths = [540, 2340, 900, 1323]
+                round1_idx = len(grid_widths)
+                for _r in range(num_rounds):
+                    grid_widths.append(1701 if _r < num_rounds - 1 else 1843)
+                total_w = sum(grid_widths)
+                tblPr = _parse_xml(
+                    '<w:tblPr xmlns:w="%s"><w:tblW w:w="%s" w:type="dxa"/>'
+                    '<w:tblLayout w:type="fixed"/>'
+                    '<w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" '
+                    'w:lastColumn="0" w:noHBand="0" w:noVBand="0"/></w:tblPr>' % (_WNS, total_w))
+                grid_el = _parse_xml('<w:tblGrid xmlns:w="%s"/>' % _WNS)
+                for _wd in grid_widths:
+                    grid_el.append(_parse_xml('<w:gridCol xmlns:w="%s" w:w="%s"/>' % (_WNS, _wd)))
+                tbl = _parse_xml('<w:tbl xmlns:w="%s"/>' % _WNS)
+                tbl.append(tblPr); tbl.append(grid_el)
+                # победители по слотам
+                winner_cells = {}
+                for _r in range(num_rounds):
+                    n_groups = total_slots // (2 ** (_r + 1))
+                    for _g in range(n_groups):
+                        _s = (_g * (2 ** (_r + 1)) + (2 ** _r - 1)) if _r > 0 else (_g * 2)
+                        _row = 2 * _s + 1
+                        _col = round1_idx + _r
+                        _pi = _g if _r == 0 else (_r * 1000 + _g)
+                        winner_cells[(_row, _col)] = results_map.get(_pi, '')
+                def _outcome_borders(_c, slot_idx, is_name_row):
+                    """Границы ячейки в outcome-колонке (победители/чемпион).
+                    Точное воспроизведение вилки прототипа T12."""
+                    if _c == champ_col:
+                        # чемпионская колонка: ствол [left] + жёлтая ячейка [bottom,left]
+                        if not is_name_row and is_champ_slot(slot_idx):
+                            return ['bottom', 'left']
+                        if num_rounds >= 2 and (top_ws < slot_idx <= bot_ws):
+                            return ['left']
+                        return []
+                    # --- колонки победителей ---
+                    span = 2 ** (_c + 1)          # слотов на группу
+                    _g = slot_idx // span
+                    s_node = _g * span + (span // 2 - 1)   # слот победителя группы (<- win slot parity)
+                    # пары рисуются только для реально занятых слотов (BYE-напарник не создаёт вилку)
+                    # пара round1: (s_node, s_node+1) оба должны существовать
+                    pair_complete = (s_node + 1 < n) if _c == 0 else True
+                    if not pair_complete:
+                        return []
+                    if not is_name_row and slot_idx == s_node:
+                        return ['left', 'bottom']          # бокс победителя (клуб-строка)
+                    if is_name_row and slot_idx == s_node + 1:
+                        return ['left', 'top']             # угловая скобка (имя-строка след. слота)
+                    if not is_name_row and slot_idx == total_slots - 1:
+                        return ['left']                    # продолжение ствола вниз
+                    return []
+
+                def is_champ_slot(sidx):
+                    return (sidx * 2 + 1 == total_slots - 1)
+
+                def _make_row(is_name_row, slot_idx, sl):
+                    tr = _parse_xml('<w:tr xmlns:w="%s"/>' % _WNS)
+                    out = []
+                    if is_name_row:
+                        num_tc = _copy.deepcopy(_atoms['num']); _set_tc_text(num_tc, str(slot_idx + 1) if sl else '')
+                        name_tc = _copy.deepcopy(_atoms['name']); _set_tc_text(name_tc, sl[0] if sl else '')
+                        yr_tc = _copy.deepcopy(_atoms['year']); _clear_tc(yr_tc)
+                        # right-граница год-колонки = там, где у round1 winner есть LEFT (прерывистая вилка)
+                        if 'left' in _outcome_borders(0, slot_idx, True):
+                            _set_borders(yr_tc, ['right'])
+                        else:
+                            _set_borders(yr_tc, [])
+                        out = [num_tc, name_tc, yr_tc]
+                        for _c in range(num_rounds):
+                            base = _atoms['winner'] if _c < num_rounds - 1 else _atoms['champ_plain']
+                            _oc = _copy.deepcopy(base); _clear_tc(_oc)
+                            _set_borders(_oc, _outcome_borders(_c, slot_idx, True))
+                            out.append(_oc)
+                    else:
+                        num_tc = _copy.deepcopy(_atoms['num']); _clear_tc(num_tc)
+                        club_tc = _copy.deepcopy(_atoms['club']); _set_tc_text(club_tc, sl[1] if sl else '')
+                        sp_tc = _copy.deepcopy(_atoms['spacer']); _clear_tc(sp_tc)
+                        yr_tc = _copy.deepcopy(_atoms['year']); _set_tc_text(yr_tc, sl[2] if sl else '')
+                        if 'left' in _outcome_borders(0, slot_idx, False):
+                            _set_borders(yr_tc, ['right'])
+                        else:
+                            _set_borders(yr_tc, [])
+                        out = [num_tc, club_tc, sp_tc, yr_tc]
+                        champion_row = total_slots - 1
+                        for _c in range(num_rounds):
+                            _col = round1_idx + _c
+                            is_champ_cell = (_c == num_rounds - 1) and (slot_idx * 2 + 1 == champion_row)
+                            base = _atoms['winner'] if _c < num_rounds - 1 else (
+                                _atoms['champ'] if is_champ_cell else _atoms['champ_plain'])
+                            tc = _copy.deepcopy(base); _clear_tc(tc)
+                            _rr = 2 * slot_idx + 1
+                            _text = winner_cells.get((_rr, _col), '')
+                            _set_borders(tc, _outcome_borders(_c, slot_idx, False))
+                            _set_tc_text(tc, _text)
+                            out.append(tc)
+                    for tc in out:
+                        tr.append(tc)
+                    return tr
+                for _i in range(total_slots):
+                    sl = members[_i] if _i < n else None
+                    tbl.append(_make_row(True, _i, sl))
+                    tbl.append(_make_row(False, _i, sl))
+                return tbl
+
+            # Готовим данные по категориям из жеребьёвки
+            # results: [(pair_index, winner_id)] по категории
+            results_by_wc = {}
+            for _r in results:
+                results_by_wc.setdefault(_r['weight_class'], {})[_r['pair_index']] = _r['winner_id']
+
+            # Строим новые элементы: (заголовок-абзац «Весовая категория N кг», таблица)
+            new_gfx = []   # [(wc_para, tbl, weight_value)]
+            for wc in order:
+                slots = groups.get(wc) or []
+                slots = sorted(slots, key=lambda x: x['slot'])
+                if not slots:
+                    continue
+                members = []
+                for _s in slots:
+                    a = by_id.get(_s['athlete_id'])
+                    name = a['name'] if a else ('#' + str(_s['athlete_id']))
+                    club = ((a or {}).get('region') or '').replace('Калмыкия', '').strip() if a else ''
+                    year = str(a.get('birth_year') or '') if a else ''
+                    members.append((name, club, year))
+                # результаты победителей по слотам: pair_index -> имя
+                rm = {}
+                for _pi, _wid in (results_by_wc.get(wc) or {}).items():
+                    _a = by_id.get(_wid)
+                    rm[_pi] = _a['name'] if _a else ''
+                _mm = _re.search(r'(\d+(?:\.\d+)?)', wc or '')
+                _wv = float(_mm.group(1)) if _mm else None
+                # wc вида «мужской 44 кг» уже грамматически корректен как заголовок
+                wc_para = _parse_xml(
+                    '<w:p xmlns:w="%s"><w:r><w:t>Весовая категория %s</w:t></w:r></w:p>' % (_WNS, wc))
+                new_gfx.append((wc_para, _build_bracket(members, rm), _wv))
+
+        # Заменяем прототипную таблицу сгенерированными парами (абзац «Весовая категория» + таблица).
+        # Абзац {WEIGHT_CLASS} перед прототипом в шаблоне не нужен — удаляем его.
+        _gfx_ready = ('new_gfx' in dir() and new_gfx and proto_tbl_el is not None)
+        if _gfx_ready:
+            _body = doc.element.body
+            _proto_parent = proto_tbl_el.getparent()
+            # позиция вставки = индекс прототипа в родителе (ДО удаления)
+            _pos = list(_proto_parent).index(proto_tbl_el)
+            # удаляем соседний абзац {WEIGHT_CLASS} прямо перед прототипом
+            _prev_sib = proto_tbl_el.getprevious()
+            _proto_parent.remove(proto_tbl_el)
+            if _prev_sib is not None and _prev_sib.tag == _qw('p'):
+                _ptxt = ''.join(_n.text or '' for _n in _prev_sib.iter(_qw('t')))
+                if '{WEIGHT_CLASS}' in _ptxt:
+                    _proto_parent.remove(_prev_sib)
+                    _pos -= 1
+            # вставляем пары (абзац + таблица) на место прототипа
+            _children_now = list(_proto_parent)
+            for _wp, _tb, _w in new_gfx:
+                _children_now.insert(_pos, _tb)
+                _children_now.insert(_pos, _wp)
+                _pos += 2
+            # пересобираем родителя в новом порядке
+            for _el in list(_proto_parent):
+                _proto_parent.remove(_el)
+            for _el in _children_now:
+                _proto_parent.append(_el)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+
+    # === Сортировка весовых категорий по возрастанию в протоколах ===
+    # Призёры: категории идут парами (заголовок «ПРОТОКОЛ ПОБЕДИТЕЛЕЙ» + таблица «N кг»)
+    # и в шаблоне расположены хаотично — сортируем пары по весу.
+    # Графики: таблицы с привязкой к абзацу «Весовая категория N кг» сортируем по весу.
+    try:
+        from docx.oxml.ns import qn as _sqn
+        _body = doc.element.body
+        _children = list(_body)
+
+        def _txt(el):
+            return ''.join(t.text or '' for t in el.iter(_sqn('w:t')))
+
+        def _is_win_hdr(el):
+            return el.tag == _sqn('w:p') and 'ПРОТОКОЛ ПОБЕДИТЕЛЕЙ' in _txt(el)
+
+        def _prz_w(el):
+            if el.tag != _sqn('w:tbl'):
+                return None
+            _tr = el.find(_sqn('w:tr'))
+            if _tr is None:
+                return None
+            _tc = _tr.find(_sqn('w:tc'))
+            if _tc is None:
+                return None
+            _m = _re.match(r'^\s*(\d+(?:\.\d+)?)\s*кг\s*$', _txt(_tc).strip())
+            return float(_m.group(1)) if _m else None
+
+        # --- Сортировка призёров ---
+        _win_units = []
+        _i = 0
+        while _i < len(_children):
+            if _is_win_hdr(_children[_i]) and _i + 1 < len(_children):
+                _w = _prz_w(_children[_i + 1])
+                if _w is not None:
+                    _win_units.append([_i, _w, _children[_i], _children[_i + 1]])
+                    _i += 2
+                    continue
+            _i += 1
+        if _win_units:
+            _sorted_units = sorted(_win_units, key=lambda u: u[1])
+            _positions = [u[0] for u in _win_units]
+            _elems = []
+            for u in _sorted_units:
+                _elems.append(u[2])
+                _elems.append(u[3])
+            for _k, _p in enumerate(_positions):
+                _children[_p] = _elems[2 * _k]
+                _children[_p + 1] = _elems[2 * _k + 1]
+
+        # --- Сортировка графиков по возрастанию ВНУТРИ каждой секции ---
+        # Секция начинается с абзаца «ПРОТОКОЛ ГРАФИКОВ СОРЕВНОВАНИЙ»; внутри секции
+        # идут пары (абзац «Весовая категория N кг» + таблица-сетка). Сортируем пары каждой
+        # секции отдельно, не перемешивая секции между собой.
+        def _wc_w(el):
+            if el.tag != _sqn('w:p'):
+                return None
+            _m = _re.match(r'^Весовая\s+категория\s+(\d+(?:\.\d+)?)\s*кг', _txt(el).strip(), _re.IGNORECASE)
+            return float(_m.group(1)) if _m else None
+
+        def _is_gfx_hdr(el):
+            return el.tag == _sqn('w:p') and 'ПРОТОКОЛ ГРАФИКОВ' in _txt(el)
+
+        # Находим границы секций (по заголовкам GHDR) и обрабатываем каждую
+        _gfx_sections = []
+        _i = 0
+        while _i < len(_children):
+            if _is_gfx_hdr(_children[_i]):
+                _start = _i + 1
+                _j = _start
+                while _j < len(_children) and not _is_gfx_hdr(_children[_j]):
+                    _j += 1
+                _gfx_sections.append((_start, _j))
+                _i = _j
+            else:
+                _i += 1
+
+        for _start, _end in _gfx_sections:
+            # собираем пары (wc_para, tbl) в пределах секции; между абзацем категории
+            # и таблицей могут стоять пустые абзацы — пропускаем их.
+            _pairs = []
+            _i = _start
+            while _i < _end:
+                _w = _wc_w(_children[_i])
+                if _w is not None:
+                    # ищем следующую таблицу в секции
+                    _k = _i + 1
+                    while _k < _end and _children[_k].tag != _sqn('w:tbl'):
+                        _k += 1
+                    if _k < _end:
+                        _pairs.append([_i, _w, _children[_i], _children[_k]])
+                        _i = _k + 1
+                        continue
+                _i += 1
+            if not _pairs:
+                continue
+            _sorted_pairs = sorted(_pairs, key=lambda u: u[1])
+            _positions = [u[0] for u in _pairs]
+            _elems = []
+            for u in _sorted_pairs:
+                _elems.append(u[2])
+                _elems.append(u[3])
+            for _k, _p in enumerate(_positions):
+                _children[_p] = _elems[2 * _k]
+                _children[_p + 1] = _elems[2 * _k + 1]
+
+        # Записать обратно в тело
+        for _el in list(_body):
+            _body.remove(_el)
+        for _el in _children:
+            _body.append(_el)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+
+    return doc
+
+
+@app.route('/api/report/<int:tournament_id>', methods=['GET'])
+def report_docx(tournament_id):
+    """Сформировать отчёт главного судьи на основе ogl_tmp.docx.
+
+    Колонтитулы, заголовки, стили и таблицы шаблона сохраняются как есть;
+    заполняются только места с плейсхолдерами данными из приложения:
+    {TITLE}, {DATE}, {CITY}, {VENUE}, {REFEREE}, {SECRETARY}, число участников,
+    а также синхронизируются протоколы (регламент, призёры, графики).
+    """
+    if not _HAS_DOCX:
+        return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
+    from io import BytesIO
+
+    # Найти шаблон (единый ogl_tmp.docx)
+    tmpl = None
+    for cand in (os.path.join(PROJECT_DIR, 'ogl_tmp.docx'),
+                 os.path.join(ASSETS_DIR, 'ogl_tmp.docx'),
+                 os.path.join(_get_data_dir(), 'ogl_tmp.docx')):
+        if os.path.exists(cand):
+            tmpl = cand
+            break
+    if not tmpl:
+        return jsonify({'error': 'Шаблон отчёта (ogl_tmp.docx) не найден'}), 500
+
+    doc = _build_report_document(tournament_id, tmpl)
+    if isinstance(doc, tuple):  # (json, status)
+        return doc
 
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
     return send_file(buf, as_attachment=True,
                      download_name=f"otchet_glavnogo_sudi_{tournament_id}.docx",
+                     mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
+@app.route('/api/report/<int:tournament_id>/sostav-par', methods=['GET'])
+def report_sostav_par(tournament_id):
+    """Сформировать «Состав пар» на основе sp_tmp.docx.
+
+    Заполняет плейсхолдеры {TOURNZMENTNAME}, {TOURNZMENTDATE}, {FIGTHINGYEARS},
+    строит таблицу пар всех раундов из жеребьёвки/сетки:
+    № п/п | в/к | боец1 (красный угол) | Спорт/организация | Рез.боя | боец2 (синий угол) | Спорт/организация.
+    Группировка как в шаблоне: подзаголовок «Юноши {годы}» / «Девушки {годы}» + строки пар.
+    """
+    if not _HAS_DOCX:
+        return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
+    from io import BytesIO
+    import re as _re
+    import copy as _copy
+    from collections import defaultdict as _dd
+    from docx.oxml.ns import qn as _qn
+    _W_MAIN = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+
+    # Найти шаблон sp_tmp.docx (или заготовку sp_tmp_new.docx)
+    tmpl = None
+    for _dir in (DATA_DIR, ASSETS_DIR, PROJECT_DIR, _get_data_dir()):
+        for cand in ('sp_tmp_new.docx', 'sp_tmp.docx'):
+            c = os.path.join(_dir, cand)
+            if os.path.exists(c):
+                tmpl = c
+                break
+        if tmpl:
+            break
+    if not tmpl:
+        return jsonify({'error': 'Шаблон состава пар (sp_tmp.docx) не найден'}), 500
+
+    # Данные турнира и жеребьёвки (аналогично _build_report_document)
+    conn = get_db()
+    t = row_to_dict(conn.execute("SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
+    if t is None:
+        conn.close()
+        return jsonify({'error': 'Соревнование не найдено'}), 404
+    lottery = rows_to_list(conn.execute(
+        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+    results = rows_to_list(conn.execute(
+        "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
+    ath_ids = [r['athlete_id'] for r in conn.execute(
+        "SELECT athlete_id FROM lottery WHERE tournament_id=?", (tournament_id,)).fetchall()]
+    conn.close()
+
+    athletes = []
+    if ath_ids:
+        _ph = ','.join('?' * len(ath_ids))
+        connb = get_db()
+        athletes = rows_to_list(connb.execute(f"SELECT * FROM athletes WHERE id IN ({_ph})", ath_ids).fetchall())
+        connb.close()
+    by_id = {a['id']: a for a in athletes}
+
+    def _fmt_date(s):
+        p = (s or '').split('-')
+        return f'{p[2]}.{p[1]}.{p[0]}' if len(p) == 3 else (s or '').replace('-', '.')
+    d1 = _fmt_date(t.get('date_from') or '')
+    d2 = _fmt_date(t.get('date_to') or t.get('date_from') or '')
+    dates = f'{d1} — {d2}' if d2 and d2 != d1 else d1
+
+    # --- Собираем раунды по категориям (пары) ---
+    groups = _dd(list); order = []
+    for s in lottery:
+        if s['weight_class'] not in groups:
+            order.append(s['weight_class'])
+        groups[s['weight_class']].append(s)
+    for wc in groups:
+        groups[wc].sort(key=lambda x: x['slot'])
+    order.sort(key=lambda wc: float((_re.search(r'(\d+(?:\.\d+)?)', wc or '') or _re.search(r'0', '0')).group(1) or 0))
+
+    # Коллекция пар: (wc, round_no, a1_id, a2_id, winner_id) — красный = a1 (меньший слот), синий = a2
+    from collections import OrderedDict
+    pairs_by_wc = OrderedDict()  # wc -> список пар
+    for wc in order:
+        slots = groups[wc]
+        if not slots:
+            continue
+        # пол категории — по первому лоту
+        g = by_id.get(slots[0]['athlete_id']).get('gender') or '' if by_id.get(slots[0]['athlete_id']) else ''
+        gl = g.lower()
+        gender = 'мужской' if 'муж' in gl else ('женский' if 'жен' in gl else '')
+        # годы участников
+        ys = []
+        for s in slots:
+            a = by_id.get(s['athlete_id'])
+            if a and (a.get('birth_year') or ''):
+                try: ys.append(int(str(a['birth_year']).strip()))
+                except: pass
+        wc_key = (wc, gender, ys)
+        _rounds, champion, silver, bronzes = _build_weight_rounds(slots, results)
+        plist = []
+        rno = 1
+        for rd in _rounds:
+            for (a1, a2, win, method) in rd:
+                # пропускаем пары без двух реальных бойцов (BYE — одиночные слоты не идут в состав)
+                if a1 is None or a2 is None:
+                    continue
+                plist.append((wc, gender, ys, rno, a1, a2, win))
+            rno += 1
+        pairs_by_wc[wc] = plist
+
+    # Группировка по полу (Юноши/Девушки) и годам
+    def gender_word(g):
+        return 'Юноши' if g == 'мужской' else ('Девушки' if g == 'женский' else '')
+    def year_label(ys):
+        if not ys: return ''
+        m, M = min(ys), max(ys)
+        return str(m) if m == M else f'{m}-{M}'
+
+    doc = Document(tmpl)
+
+    # --- Заполняем заголовок (header1/header2/header3) ---
+    def _replace_in_part(part_el, mapping):
+        for p in part_el.iter(_qn('w:p')):
+            runs = p.findall(_qn('w:r'))
+            if not runs: continue
+            full = ''.join(rt.text or '' for r in runs for rt in r.findall(_qn('w:t')))
+            changed = False
+            for k, v in mapping.items():
+                if k in full:
+                    full = full.replace(k, v)
+                    changed = True
+            if changed:
+                t0s = runs[0].findall(_qn('w:t'))
+                if t0s:
+                    t0s[0].text = full
+                    for r in runs[1:]:
+                        for rt in r.findall(_qn('w:t')):
+                            rt.text = ''
+                # если название турнира не в первом run (разбито), поставим в любом случае в первый w:t
+                for r in runs:
+                    for rt in r.findall(_qn('w:t')):
+                        if rt.text and '{' in rt.text:
+                            rt.text = full
+                            break
+
+    _year_all = []
+    for s in lottery:
+        a = by_id.get(s['athlete_id'])
+        if a and (a.get('birth_year') or ''):
+            try: _year_all.append(int(str(a['birth_year']).strip()))
+            except: pass
+    _years_label = year_label(_year_all) if _year_all else ''
+    for sec_i in range(len(doc.sections)):
+        sec = doc.sections[sec_i]
+        for part_name in ('header', 'footer'):
+            try:
+                part = getattr(sec, part_name)
+                hdr_el = part._element
+                _replace_in_part(hdr_el, {
+                    '{TOURNZMENTNAME}': t.get('name') or '',
+                    '{TOURNZMENTDATE}': dates,
+                    '{FIGTHINGYEARS}': _years_label,
+                })
+            except Exception:
+                pass
+
+    # --- Строим таблицу ---
+    t0 = doc.tables[0]
+    trs = t0._tbl.findall(_qn('w:tr'))
+    # Прототипы: подзаголовок (строка 1) и данных (строка 2)
+    proto_sub = None; proto_data = None
+    if len(trs) >= 1:
+        proto_sub = _copy.deepcopy(trs[1]) if len(trs) > 1 and len(trs[1].findall(_qn('w:tc'))) == 1 else None
+    if len(trs) > 2:
+        proto_data = _copy.deepcopy(trs[2])
+    # Сбрасываем таблицу до заголовка
+    for tr in trs[1:]:
+        t0._tbl.remove(tr)
+
+    def set_cell_text(tc, text):
+        ps = tc.findall(_qn('w:p'))
+        if not ps: return
+        p = ps[0]
+        runs = p.findall(_qn('w:r'))
+        if runs:
+            ts = runs[0].findall(_qn('w:t'))
+            if ts:
+                ts[0].text = text
+                for r in runs[1:]:
+                    for rt in r.findall(_qn('w:t')):
+                        rt.text = ''
+        else:
+            from docx.oxml import parse_xml
+            _safe = (text or '').replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
+            p.append(parse_xml('<w:r xmlns:w="%s"><w:t>%s</w:t></w:r>' % (_W_MAIN, _safe)))
+        # если текст содержит {}, ставим во второй run? — не нужно, ставили в 0
+
+    def replace_markers_in_cells(tr_el):
+        # заменить {FIGTHINGYEARS} и прочие в подзаголовке
+        for tc in tr_el.findall(_qn('w:tc')):
+            for p in tc.iter(_qn('w:p')):
+                runs = p.findall(_qn('w:r'))
+                if not runs: continue
+                full = ''.join(rt.text or '' for r in runs for rt in r.findall(_qn('w:t')))
+                if '{' in full:
+                    full = full.replace('{FIGTHINGYEARS}', _years_label)
+                    ts = runs[0].findall(_qn('w:t'))
+                    if ts:
+                        ts[0].text = full
+                        for r in runs[1:]:
+                            for rt in r.findall(_qn('w:t')):
+                                rt.text = ''
+
+    # Собираем группы (пол, годы) -> [wcs], сортируем
+    from collections import OrderedDict
+    group_map = OrderedDict()
+    for wc, plist in pairs_by_wc.items():
+        if not plist: continue
+        gender = plist[0][1]
+        ys = plist[0][2]
+        gkey = (gender_word(gender), year_label(set(ys)))
+        group_map.setdefault(gkey, []).append(wc)
+    # сортировка групп: Юноши сначала, затем Девушки; внутри — по весу
+    def gsort(item):
+        (gw, yl), wcs = item
+        rank = 0 if gw == 'Юноши' else (1 if gw == 'Девушки' else 2)
+        return (rank, yl)
+    group_sorted = sorted(group_map.items(), key=gsort)
+
+    seq = 0
+    for (gword, ylabel), wcs in group_sorted:
+        # подзаголовок
+        if proto_sub is not None:
+            sub = _copy.deepcopy(proto_sub)
+            replace_markers_in_cells(sub)
+            # подставим годы/пол
+            for tc in sub.findall(_qn('w:tc')):
+                for p in tc.iter(_qn('w:p')):
+                    runs = p.findall(_qn('w:r'))
+                    if not runs: continue
+                    full = ''.join(rt.text or '' for r in runs for rt in r.findall(_qn('w:t')))
+                    if '{' in full or 'Юноши' in full or 'Девуш' in full:
+                        full = (gword + ' ' + ylabel)
+                        ts = runs[0].findall(_qn('w:t'))
+                        if ts:
+                            ts[0].text = full
+                            for r in runs[1:]:
+                                for rt in r.findall(_qn('w:t')):
+                                    rt.text = ''
+            t0._tbl.append(sub)
+        # пары
+        for wc in wcs:
+            for (_, gender, ys, rno, a1, a2, win) in pairs_by_wc[wc]:
+                seq += 1
+                # вес категории
+                mm = _re.search(r'([\d.,+-]+)', wc or '')
+                weight = mm.group(1) if mm else wc
+                # боец1 = a1 (меньший слот), боец2 = a2
+                def name_of(aid):
+                    a = by_id.get(aid)
+                    return a['name'] if a else ('#' + str(aid))
+                def club_of(aid):
+                    a = by_id.get(aid)
+                    return ((a.get('region') or '').replace('Калмыкия','').strip()) if a else ''
+                # результат
+                res = ''
+                if win is not None:
+                    res = 'в'
+                    # попробуем метод
+                    for r in results:
+                        if r.get('weight_class') == wc and r.get('winner_id') == win:
+                            mth = (r.get('method') or '')
+                            if mth: res = mth if mth != 'авто' else 'в'
+                            break
+                row = _copy.deepcopy(proto_data) if proto_data is not None else None
+                if row is None:
+                    continue
+                cells = row.findall(_qn('w:tc'))
+                # колонки: 0 №, 1 в/к, 2 боец1, 3 спорт1, 4 рез, 5 боец2, 6 спорт2
+                if len(cells) >= 7:
+                    set_cell_text(cells[0], str(seq))
+                    set_cell_text(cells[1], weight)
+                    set_cell_text(cells[2], name_of(a1))
+                    set_cell_text(cells[3], club_of(a1))
+                    set_cell_text(cells[4], res)
+                    set_cell_text(cells[5], name_of(a2))
+                    set_cell_text(cells[6], club_of(a2))
+                t0._tbl.append(row)
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True,
+                     download_name=f"sostav_par_{tournament_id}.docx",
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
 

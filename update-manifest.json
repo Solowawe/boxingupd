@@ -1,5 +1,5 @@
 {
-  "version": "1.0.46",
+  "version": "1.0.57",
   "files": [
     "app.js",
     "index.html",
@@ -12,3 +12,4 @@
     "update-manifest.json"
   ]
 }
+
