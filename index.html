@@ -147,6 +147,7 @@
                             <option value="">-- Выберите соревнование --</option>
                         </select>
                         <button id="generate-weighin" class="btn-primary">📋 Загрузить спортсменов</button>
+                        <button id="weighin-save-word" class="btn-secondary">💾 Сохранить в Word</button>
                     </div>
                     <div id="weighin-container"></div>
                     <table id="weighin-table">
@@ -157,7 +158,7 @@
                                 <th>Год рожд.</th>
                                 <th>Пол</th>
                                 <th>Регион</th>
-                                <th>Вес (кг)</th>
+                                <th id="weighin-th-weight" class="sortable" title="Нажмите для сортировки по весу">Вес (кг)<span class="sort-indicator" id="weighin-weight-indicator"></span></th>
                                 <th>Действия</th>
                             </tr>
                         </thead>

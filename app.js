@@ -1660,16 +1660,6 @@ setupExport() {
         const genderFilter = document.getElementById('weighin-gender-filter');
         const select = document.getElementById('weighin-tournament-select');
 
-        if (searchInput) {
-            searchInput.addEventListener('input', () => this.renderWeighin());
-        }
-        if (genderFilter) {
-            genderFilter.addEventListener('change', () => this.renderWeighin());
-        }
-        if (!select) {
-            console.warn('setupWeighin: элемент weighin-tournament-select не найден');
-            return;
-        }
         const loadTournaments = async () => {
             try {
                 const tournaments = await API.getTournaments();
@@ -1692,9 +1682,91 @@ setupExport() {
             }
         };
 
+        // Защита от повторного вешания обработчиков (setupWeighin вызывается дважды)
+        if (this._weighinBound) {
+            loadTournaments();
+            return;
+        }
+        this._weighinBound = true;
+
+        if (searchInput) {
+            searchInput.addEventListener('input', () => this.renderWeighin());
+        }
+        if (genderFilter) {
+            genderFilter.addEventListener('change', () => this.renderWeighin());
+        }
+        if (!select) {
+            console.warn('setupWeighin: элемент weighin-tournament-select не найден');
+            return;
+        }
+
         loadTournaments();
 
         select.addEventListener('change', () => this.renderWeighin());
+
+        const weightTh = document.getElementById('weighin-th-weight');
+        if (weightTh && !weightTh.dataset.bound) {
+            weightTh.dataset.bound = '1';
+            weightTh.addEventListener('click', () => {
+                const cur = this._weighinSort || 'none';
+                this._weighinSort = (cur === 'asc') ? 'none' : 'asc';
+                const indicator = document.getElementById('weighin-weight-indicator');
+                if (indicator) {
+                    if (this._weighinSort === 'asc') indicator.textContent = ' ▲';
+                    else indicator.textContent = '';
+                }
+                this.renderWeighin();
+            });
+        }
+
+        const saveWordBtn = document.getElementById('weighin-save-word');
+        if (saveWordBtn) {
+            saveWordBtn.addEventListener('click', () => this.saveWeighinWord());
+        }
+    },
+
+    async saveWeighinWord() {
+        const tbody = document.getElementById('weighin-list');
+        if (!tbody) return;
+        const rows = [...tbody.querySelectorAll('tr')]
+            .filter(tr => tr.dataset.athleteId)
+            .map((tr, i) => {
+                const cells = tr.querySelectorAll('td');
+                const name = cells[1]?.textContent.trim() || '';
+                const birthYear = cells[2]?.textContent.trim() || '';
+                const gender = cells[3]?.textContent.trim() || '';
+                const region = cells[4]?.textContent.trim() || '-';
+                const weightInput = tr.querySelector('.weighin-input');
+                const weight = weightInput ? weightInput.value : '';
+                return { n: i + 1, name, birthYear, gender, region, weight };
+            });
+        if (rows.length === 0) {
+            toast('Нет данных для сохранения');
+            return;
+        }
+        try {
+            const res = await fetch('/api/weighin/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rows })
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || 'Ошибка при сохранении');
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `vzveshivanie_${Date.now()}.docx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            toast('💾 Таблица взвешивания сохранена в Word', 'success');
+        } catch (err) {
+            toast('Ошибка сохранения в Word: ' + err.message);
+        }
     },
 
     async renderWeighin() {
@@ -1718,6 +1790,11 @@ setupExport() {
             }
             if (gender) {
                 athletes = athletes.filter(a => a.gender === gender);
+            }
+
+            // Сортировка по весу (возрастание), если включена
+            if (this._weighinSort === 'asc') {
+                athletes = athletes.slice().sort((a, b) => (a.weight || 0) - (b.weight || 0));
             }
 
             const tbody = document.getElementById('weighin-list');

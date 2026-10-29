@@ -910,6 +910,18 @@ td.editable:hover {
 #weighin-table .btn-save {
     padding: 6px 14px;
 }
+#weighin-th-weight.sortable {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+#weighin-th-weight.sortable:hover {
+    color: #ffd700;
+}
+#weighin-weight-indicator {
+    font-size: 0.8em;
+    color: #ffd700;
+}
 
 /* Кнопка замены спортсмена в сетке */
 .btn-edit-fighter {

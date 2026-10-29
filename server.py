@@ -2971,6 +2971,60 @@ def report_sostav_par(tournament_id):
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
 
+@app.route('/api/weighin/export', methods=['POST'])
+def export_weighin_word():
+    """Сохранить таблицу взвешивания в Word (.docx) с текущим списком из UI."""
+    if not _HAS_DOCX:
+        return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
+    data = request.get_json(silent=True) or {}
+    rows = data.get('rows') or []
+    if not rows:
+        return jsonify({'error': 'Нет данных для сохранения'}), 400
+
+    from docx import Document
+    from docx.shared import Pt, Cm
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from io import BytesIO
+
+    doc = Document()
+    title = doc.add_heading('Таблица взвешивания', level=1)
+    title.alignment = 1  # центр
+
+    headers = ['№', 'Ф.И.О.', 'Год рожд.', 'Пол', 'Регион', 'Вес (кг)']
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = 'Table Grid'
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    hdr = table.rows[0].cells
+    for j, h in enumerate(headers):
+        hdr[j].text = h
+        for par in hdr[j].paragraphs[0].runs:
+            par.font.bold = True
+
+    for r in rows:
+        cells = table.add_row().cells
+        cells[0].text = str(r.get('n', ''))
+        cells[1].text = str(r.get('name', ''))
+        cells[2].text = str(r.get('birthYear', ''))
+        cells[3].text = str(r.get('gender', ''))
+        cells[4].text = str(r.get('region', '-'))
+        cells[5].text = str(r.get('weight', ''))
+
+    # Ширина колонок
+    widths = [Cm(1.2), Cm(6.0), Cm(2.2), Cm(2.2), Cm(4.0), Cm(2.5)]
+    for row in table.rows:
+        for j, w in enumerate(widths):
+            if j < len(row.cells):
+                row.cells[j].width = w
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True,
+                     download_name=f"vzveshivanie_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+                     mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
 # ======================== СТАТИЧЕСКИЕ ФАЙЛЫ ========================
 
 @app.route('/')
