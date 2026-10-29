@@ -197,7 +197,8 @@ LOCAL_VERSION_FILE = 'local_version.txt'
 UPDATE_ALLOWED = {
     'app.js', 'index.html', 'style.css', 'login.html',
     'server.py', 'database.py', 'app.py', 'requirements.txt',
-    'update-manifest.json'
+    'update-manifest.json', 'ogl_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx',
+    'reglament_tmp.docx'
 }
 
 
