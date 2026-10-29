@@ -9,7 +9,7 @@
     "database.py",
     "app.py",
     "requirements.txt",
-    "update-manifest.json"
+    "update-manifest.json",
+    "reglament_tmp.docx"
   ]
 }
-

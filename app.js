@@ -1660,6 +1660,15 @@ setupExport() {
         const genderFilter = document.getElementById('weighin-gender-filter');
         const select = document.getElementById('weighin-tournament-select');
 
+        // Восстанавливаем сохранённую сортировку по весу из localStorage
+        try {
+            if (this._weighinSort == null) {
+                this._weighinSort = localStorage.getItem('weighin_sort') === 'asc' ? 'asc' : 'none';
+            }
+        } catch (e) {
+            this._weighinSort = this._weighinSort || 'none';
+        }
+
         const loadTournaments = async () => {
             try {
                 const tournaments = await API.getTournaments();
@@ -1710,11 +1719,9 @@ setupExport() {
             weightTh.addEventListener('click', () => {
                 const cur = this._weighinSort || 'none';
                 this._weighinSort = (cur === 'asc') ? 'none' : 'asc';
-                const indicator = document.getElementById('weighin-weight-indicator');
-                if (indicator) {
-                    if (this._weighinSort === 'asc') indicator.textContent = ' ▲';
-                    else indicator.textContent = '';
-                }
+                try {
+                    localStorage.setItem('weighin_sort', this._weighinSort);
+                } catch (e) {}
                 this.renderWeighin();
             });
         }
@@ -1722,6 +1729,39 @@ setupExport() {
         const saveWordBtn = document.getElementById('weighin-save-word');
         if (saveWordBtn) {
             saveWordBtn.addEventListener('click', () => this.saveWeighinWord());
+        }
+
+        const saveReglamentBtn = document.getElementById('weighin-save-reglament');
+        if (saveReglamentBtn) {
+            saveReglamentBtn.addEventListener('click', () => this.saveReglamentWord());
+        }
+    },
+
+    async saveReglamentWord() {
+        const select = document.getElementById('weighin-tournament-select');
+        const tournamentId = select ? select.value : '';
+        if (!tournamentId) {
+            toast('Выберите соревнование для сохранения регламента');
+            return;
+        }
+        try {
+            const res = await fetch(`/api/weighin/reglament?tournament_id=${tournamentId}`);
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || 'Ошибка при формировании регламента');
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `reglament_${tournamentId}.docx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            toast('📄 Регламент сохранён в Word', 'success');
+        } catch (err) {
+            toast('Ошибка сохранения регламента: ' + err.message);
         }
     },
 
@@ -1799,6 +1839,12 @@ setupExport() {
 
             const tbody = document.getElementById('weighin-list');
             const count = document.getElementById('weighin-count');
+
+            // Обновляем индикатор сортировки по весу
+            const indicator = document.getElementById('weighin-weight-indicator');
+            if (indicator) {
+                indicator.textContent = (this._weighinSort === 'asc') ? ' ▲' : '';
+            }
 
             tbody.innerHTML = '';
             count.textContent = `Спортсменов: ${athletes.length}`;

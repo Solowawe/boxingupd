@@ -114,7 +114,7 @@ if getattr(sys, 'frozen', False):
     # в папку рядом с exe), чтобы их можно было редактировать/заменять.
     # При обновлении версии (встроенная новее сохранённой) — перезаписываем шаблоны,
     # чтобы старые/повреждённые копии не оставались после апдейта.
-    for _f in ('ogl_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx'):
+    for _f in ('ogl_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx', 'reglament_tmp.docx'):
         _src = os.path.join(_bundled, _f)
         _dst = os.path.join(DATA_DIR, _f)
         if not os.path.exists(_src):
@@ -3022,6 +3022,427 @@ def export_weighin_word():
     buf.seek(0)
     return send_file(buf, as_attachment=True,
                      download_name=f"vzveshivanie_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
+                     mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
+@app.route('/api/weighin/reglament', methods=['GET'])
+def export_weighin_reglament():
+    """Сформировать отдельный регламент соревнований (reglament_tmp.docx).
+
+    Заполняет шапку ({TOURNIRNAME}, {FIGTHERYO}, даты), группирует весовые
+    категории по полу (мужской → «Юноши», женский → «Девушки») и годам
+    рождения участников (диапазон от большего к меньшему, e.g. «Юноши 2016-2015
+    г.р.»), выводит по строке на категорию: вес | кол-во участников | бои по
+    дням | кол-во боёв. Юноши — в Табл1, Девушки — в Табл2.
+    """
+    if not _HAS_DOCX:
+        return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
+    from io import BytesIO
+    import re as _re
+    import copy as _copy
+    from collections import defaultdict as _dd
+    from docx.oxml.ns import qn as _qn
+    _W_MAIN = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+
+    tournament_id = request.args.get('tournament_id', type=int)
+    if not tournament_id:
+        return jsonify({'error': 'Не передан tournament_id'}), 400
+
+    tmpl = None
+    for _dir in (DATA_DIR, ASSETS_DIR, PROJECT_DIR, _get_data_dir()):
+        c = os.path.join(_dir, 'reglament_tmp.docx')
+        if os.path.exists(c):
+            tmpl = c
+            break
+    if not tmpl:
+        return jsonify({'error': 'Шаблон регламента (reglament_tmp.docx) не найден'}), 500
+
+    conn = get_db()
+    t = row_to_dict(conn.execute("SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
+    if t is None:
+        conn.close()
+        return jsonify({'error': 'Соревнование не найдено'}), 404
+    lottery = rows_to_list(conn.execute(
+        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+    results = rows_to_list(conn.execute(
+        "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
+    ath_ids = [r['athlete_id'] for r in lottery]
+    conn.close()
+
+    athletes = []
+    if ath_ids:
+        _ph = ','.join('?' * len(ath_ids))
+        connb = get_db()
+        athletes = rows_to_list(connb.execute(f"SELECT * FROM athletes WHERE id IN ({_ph})", ath_ids).fetchall())
+        connb.close()
+    by_id = {a['id']: a for a in athletes}
+
+    def _fmt_date(s):
+        p = (s or '').split('-')
+        return f'{p[2]}.{p[1]}.{p[0]}' if len(p) == 3 else (s or '').replace('-', '.')
+    d1 = _fmt_date(t.get('date_from') or '')
+    d2 = _fmt_date(t.get('date_to') or t.get('date_from') or '')
+    dates = f'{d1} — {d2}' if d2 and d2 != d1 else d1
+    # число дней: max(дни, интервал дат)
+    try:
+        _days_from_dates = (datetime.strptime(str(t['date_to']), '%Y-%m-%d') -
+                            datetime.strptime(str(t['date_from']), '%Y-%m-%d')).days + 1
+        _days_from_dates = max(1, _days_from_dates)
+    except Exception:
+        _days_from_dates = 1
+    total_days = max(1, int(t.get('days') or 1), _days_from_dates)
+
+    def _gender_athlete(a):
+        g = (a.get('gender') or '').strip().lower() if a else ''
+        if 'муж' in g or g in ('м', 'm', 'male'):
+            return 'мужской'
+        if 'жен' in g or g in ('ж', 'f', 'female'):
+            return 'женский'
+        return ''
+    def _gender_word(g):
+        return 'Юноши' if g == 'мужской' else ('Девушки' if g == 'женский' else (g or ''))
+
+    # --- Собираем категории (порядок по возрастанию веса) ---
+    groups = _dd(list)
+    for s in lottery:
+        groups[s['weight_class']].append(s)
+    for wc in groups:
+        groups[wc].sort(key=lambda x: x['slot'])
+    order = sorted(groups.keys(), key=lambda wc: (
+        float((_re.search(r'(\d+(?:\.\d+)?)', wc or '') or _re.search(r'(\d)', '0')).group(1) or 0)))
+
+    # пол и годы категории (по лотам)
+    def _slot_gender(s):
+        return _gender_athlete(by_id.get(s['athlete_id']))
+    def _slot_year(s):
+        a = by_id.get(s['athlete_id'])
+        try:
+            return int(str((a or {}).get('birth_year') or '').strip())
+        except (TypeError, ValueError):
+            return None
+
+    _cat_gender = {}
+    _cat_years = {}
+    for wc in order:
+        _slots = groups[wc]
+        _g = _slot_gender(_slots[0]) if _slots else ''
+        _cat_gender[wc] = _g
+        _ys = [_slot_year(s) for s in _slots]
+        _ys = [y for y in _ys if y is not None]
+        _cat_years[wc] = _ys
+
+    # --- Раскидываем категории: Юноши -> Табл1, Девушки -> Табл2 ---
+    by_gender = {'Юноши': [], 'Девушки': [], '': []}
+    for wc in order:
+        gw = _gender_word(_cat_gender.get(wc) or '')
+        by_gender.setdefault(gw, []).append(wc)
+
+    # --- Помощь: распределение боёв по дням (аналог roundToDay) ---
+    def _round_to_day(round_num, max_rounds, days):
+        days = max(1, int(days) or 1)
+        if not max_rounds or max_rounds <= 0:
+            return 1
+        if days >= max_rounds:
+            return round_num
+        return min(days, 1 + int((round_num - 1) * days / max_rounds))
+
+    def _fights_by_day(wc):
+        """Возвращает список [кол-во реальных боёв в 1-й день, ..., total_days].
+
+        Строит раунды как в сетке (app.js): 1-й раунд — пары из жеребьёвки,
+        нечётный участник — авто-проход (НЕ бой); последующие раунды — пары
+        победителей. Учитываются только реальные бои (оба соперника), которые
+        распределяются по дням через roundToDay.
+        """
+        results_map = {}
+        for r in (results or []):
+            results_map[(r['weight_class'], r['pair_index'])] = r
+        slots = sorted(groups[wc], key=lambda x: x['slot'])
+
+        # 1-й раунд
+        rounds = []
+        fr = []
+        pidx = 0
+        for i in range(0, len(slots) - 1, 2):
+            a1, a2 = slots[i], slots[i + 1]
+            r = results_map.get((wc, pidx))
+            fr.append((a1['athlete_id'], a2['athlete_id'],
+                       (r['winner_id'] if r else None), (r['method'] if r else '')))
+            pidx += 1
+        # нечётный хвост — авто-проход (не бой): пара-заглушка (a1, None)
+        if len(slots) % 2 != 0:
+            fr.append((slots[-1]['athlete_id'], None, None, 'авто'))
+        rounds.append(fr)
+
+        # последующие раунды
+        round_num = 1
+        while True:
+            prev = rounds[-1]
+            winners = [f[2] for f in prev]
+            if any(w is None for w in winners) or len(winners) <= 1:
+                break
+            round_num += 1
+            offset = (round_num - 1) * 1000
+            nxt = []
+            for i in range(0, len(winners) - 1, 2):
+                a1, a2 = winners[i], winners[i + 1]
+                r = results_map.get((wc, offset + i))
+                nxt.append((a1, a2, (r['winner_id'] if r else None), (r['method'] if r else '')))
+            if not nxt:
+                break
+            # если последний элемент нечётный в паре — не бывает (доп. обработаем ниже)
+            rounds.append(nxt)
+
+        max_rounds = len(rounds)
+        per_day = [0] * total_days
+        for round_num, fights in enumerate(rounds, start=1):
+            day = _round_to_day(round_num, max_rounds, total_days)
+            # только реальные бои (у обоих участников есть id)
+            real = [f for f in fights if f[0] is not None and f[1] is not None]
+            per_day[day - 1] += len(real)
+        return per_day
+
+    def _set_para_text(para_el, mapping):
+        """Заменяет маркеры в абзаце, сохраняя стиль первого run."""
+        runs = para_el.findall(_qn('w:r'))
+        if not runs:
+            return
+        wts = runs[0].findall(_qn('w:t'))
+        _full = ''.join(_t.text or '' for _r in runs for _t in _r.findall(_qn('w:t')))
+        _changed = False
+        for _k, _v in mapping.items():
+            if _k in _full:
+                _full = _full.replace(_k, _v)
+                _changed = True
+        if _changed and wts:
+            wts[0].text = _full
+            for _r in runs[1:]:
+                for _t in _r.findall(_qn('w:t')):
+                    _t.text = ''
+
+    def _set_cell_text(cell_el, text):
+        """Записывает текст в ячейку (в первый w:t первого run)."""
+        for p in cell_el.findall(f'{{{_W_MAIN}}}p'):
+            runs = p.findall(f'{{{_W_MAIN}}}r')
+            if runs:
+                wts = runs[0].findall(f'{{{_W_MAIN}}}t')
+                if wts:
+                    wts[0].text = str(text)
+                    for _t in wts[1:]:
+                        _t.text = ''
+                    for _r in runs[1:]:
+                        for _t in _r.findall(f'{{{_W_MAIN}}}t'):
+                            _t.text = ''
+                    return
+        # нет run — добавим
+        p = cell_el.findall(f'{{{_W_MAIN}}}p')[0]
+        from docx.oxml import OxmlElement
+        r = OxmlElement('w:r')
+        t = OxmlElement('w:t')
+        t.text = str(text)
+        r.append(t)
+        p.append(r)
+
+    def _clone_row(tr_el):
+        return _copy.deepcopy(tr_el)
+
+    def _head_word(para_el, mapping):
+        for p in para_el.iter(_qn('w:p')):
+            _set_para_text(p, mapping)
+
+    doc = Document(tmpl)
+    body = doc.element.body
+
+    # --- Заполняем шапку (Табл0) ---
+    for tbl in doc.tables[:1]:
+        for row in tbl.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    _set_para_text(p._p, {'{TOURNIRNAME}': t.get('name') or '',
+                                          '{FIGTHERYO}': dates})
+
+    # --- Находим Табл1, Табл2 и параграф-группу ---
+    _tabs = list(body.iter(_qn('w:tbl')))
+    tbl1 = _tabs[1] if len(_tabs) > 1 else None
+    tbl2 = _tabs[2] if len(_tabs) > 2 else None
+
+    # маркеры {VK}/{KU} в шапках таблиц данных заменяем на подписи
+    for _tbl in (tbl1, tbl2):
+        if _tbl is not None:
+            _head_word(_tbl, {'{VK}': 'Весовая категория', '{KU}': 'Количество участников'})
+
+    # параграф-группа «Юноши {YO2-YO1}» (первый p с этим маркером)
+    group_p = None
+    for p in body.iter(_qn('w:p')):
+        txt = ''.join(_t.text or '' for _t in p.iter(_qn('w:t')))
+        if '{YO2-YO1}' in txt:
+            group_p = p
+            break
+
+    # --- Создание отдельной таблицы данных из шаблона Табл1 ---
+    def _new_data_table():
+        """Клонирует Табл1, оставляет только шапку, возвращает объект таблицы."""
+        _np = _copy.deepcopy(tbl1)
+        _trs = _np.findall(_qn('w:tr'))
+        for _tr in _trs[1:]:          # удаляем строку-образец данных, оставляем шапку
+            _np.remove(_tr)
+        return _np
+
+    def _fill_row(tbl_el, wc):
+        # берём строку-образец из шапки таблицы (клонируем последнюю строку исходной Табл1)
+        _sample = tbl_sample_row
+        row = _clone_row(_sample)
+        _slots = sorted(groups[wc], key=lambda x: x['slot'])
+        cnt = len(_slots)
+        _fights = _fights_by_day(wc)
+        total_fights = sum(_fights)
+        mm = _re.search(r'(\d+(?:\.\d+)?)', wc or '')
+        _weight = mm.group(1) if mm else wc
+        cells = row.findall(_qn('w:tc'))
+        if len(cells) >= 6:
+            _set_cell_text(cells[0], _weight)
+            _set_cell_text(cells[1], str(cnt))
+            for di in range(min(total_days, 3)):
+                if di < len(cells) - 2:
+                    _set_cell_text(cells[2 + di], str(_fights[di]) if di < len(_fights) else '')
+            _set_cell_text(cells[5], str(total_fights))
+        tbl_el.append(row)
+
+    # строка-образец данных (из исходной Табл1, последняя строка-данных)
+    tbl_sample_row = None
+    if tbl1 is not None:
+        _trs = tbl1.findall(_qn('w:tr'))
+        if len(_trs) >= 2:
+            tbl_sample_row = _clone_row(_trs[-1])
+
+    # --- Группировка категорий по (пол, пара лет) ---
+    def _pair_groups(wcs):
+        """Возвращает список (label_years, [wc]), разбивая годы на пары (yi-yi-1).
+        Порядок — от большего года к меньшему. Одиночный год — отдельная группа."""
+        if not wcs:
+            return []
+        # все годы всех категорий
+        all_years = set()
+        for wc in wcs:
+            all_years.update(_cat_years.get(wc) or [])
+        if not all_years:
+            return [('', wcs)]
+        years_sorted = sorted(all_years, reverse=True)  # 2016,2015,2014,...
+        # строим пары (больший, меньший): (years[0],years[1]) и т.д.
+        pairs = []
+        i = 0
+        while i < len(years_sorted):
+            if i + 1 < len(years_sorted):
+                pairs.append((years_sorted[i], years_sorted[i + 1]))
+                i += 2
+            else:
+                pairs.append((years_sorted[i], None))
+                i += 1
+        # распределяем категории по парам: категория попадает в пару, содержащую
+        # её МЛАДШИЙ (максимальный) год рождения; категории с одним годом — в пару этого года.
+        # Строгая проверка «все годы в паре» даёт искусственные хвостовые группы — не используем.
+        buckets = {i: [] for i in range(len(pairs))}
+        for wc in wcs:
+            ys = _cat_years.get(wc) or []
+            if not ys:
+                continue
+            y_max = max(ys)   # младший участник = верхняя граница возрастной группы
+            # ищем пару, в которую попадает y_max и (по возможности) весь диапазон
+            best = None
+            for i, (yhi, ylo) in enumerate(pairs):
+                low = ylo if ylo is not None else yhi
+                if low <= y_max <= yhi:
+                    # приоритет паре, покрывающей весь диапазон; иначе — ближайшей
+                    if best is None or all(low <= y <= yhi for y in ys):
+                        best = i
+                        if all(low <= y <= yhi for y in ys):
+                            break
+            if best is None:
+                # fallback: пара с ближайшим верхним годом к y_max
+                best = min(range(len(pairs)), key=lambda i: abs((pairs[i][0]) - y_max))
+            buckets[best].append(wc)
+        result = []
+        for i, (yhi, ylo) in enumerate(pairs):
+            label = str(yhi) if ylo is None else f'{yhi}-{ylo}'
+            if buckets[i]:
+                result.append((label, buckets[i]))
+        return result
+
+    # --- Собираем готовый перечень групп: (gender, label, [wc]) в нужном порядке ---
+    _gender_order = [('Юноши', by_gender.get('Юноши', [])),
+                     ('Девушки', by_gender.get('Девушки', [])),
+                     ('', by_gender.get('', []))]
+    group_blocks = []   # (gender, label, [wc])
+    for gender, wcs in _gender_order:
+        for (label, members) in _pair_groups(wcs):
+            group_blocks.append((gender, label, members))
+
+    # --- Удаляем исходные Табл1, Табл2 и параграф-группу (они станут прототипами) ---
+    # Не удаляем Tабл0 (шапку) и заголовок «РЕГЛАМЕНТ СОРЕВНОВАНИЙ» (P1).
+    if tbl1 is not None and tbl1.getparent() is not None:
+        tbl1.getparent().remove(tbl1)
+    if tbl2 is not None and tbl2.getparent() is not None:
+        tbl2.getparent().remove(tbl2)
+    if group_p is not None and group_p.getparent() is not None:
+        group_p.getparent().remove(group_p)
+
+    # --- Вставляем группы: параграф-подзаголовок + отдельная таблица данных ---
+    # Вставку ведём ПОСЛЕ параграфа «РЕГЛАМЕНТ СОРЕВНОВАНИЙ» (или в конец body).
+    # Используем курсор: каждый новый элемент вставляется ПОСЛЕ предыдущего.
+    anchor_before = None
+    for _p in body.iter(_qn('w:p')):
+        if 'РЕГЛАМЕНТ СОРЕВНОВАНИЙ' in ''.join(_t.text or '' for _t in _p.iter(_qn('w:t'))):
+            anchor_before = _p
+            break
+
+    def _make_group_para(gender, label):
+        _np = _copy.deepcopy(group_p) if group_p is not None else None
+        if _np is None:
+            return None
+        _label_txt = label if label else ''
+        _gender_txt = gender + ' ' if gender else ''
+        _set_para_text(_np, {'{YO2-YO1}': _label_txt, 'Юноши ': _gender_txt})
+        return _np
+
+    if anchor_before is None:
+        # fallback — в конец тела (перед sectPr)
+        _append_here = None
+        _body_children = list(body)
+        for _c in _body_children:
+            if _c.tag == _qn('w:sectPr'):
+                _append_here = _c
+                break
+        _last = None
+        for gender, label, members in group_blocks:
+            np_el = _make_group_para(gender, label)
+            nt_el = _new_data_table()
+            for wc in members:
+                _fill_row(nt_el, wc)
+            if _append_here is not None:
+                _append_here.addprevious(np_el) if np_el is not None else None
+                if np_el is not None:
+                    np_el.addnext(nt_el)
+            else:
+                body.append(np_el) if np_el is not None else None
+                body.append(nt_el)
+    else:
+        cursor = anchor_before
+        for gender, label, members in group_blocks:
+            np_el = _make_group_para(gender, label)
+            nt_el = _new_data_table()
+            for wc in members:
+                _fill_row(nt_el, wc)
+            if np_el is not None:
+                cursor.addnext(np_el)   # параграф после курсора
+                cursor = np_el
+            cursor.addnext(nt_el)       # таблица после параграфа/курсора
+            cursor = nt_el
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True,
+                     download_name=f"reglament_{tournament_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
 
