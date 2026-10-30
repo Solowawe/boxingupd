@@ -2666,12 +2666,8 @@ setupExport() {
             }
             return true;
         });
-        // Защита: если категория не распозналась — показываем всех, чтобы меню не было пустым
-        if (available.length === 0 && wcMatch) {
-            available = athletesAll.filter(a => !inWc.has(a.id));
-        }
         if (available.length === 0) {
-            toast('Нет доступных спортсменов для этой категории');
+            toast('Нет доступных спортсменов в этой весовой категории');
             return;
         }
 
