@@ -3223,10 +3223,94 @@ setupExport() {
                             ? `<div class="fight-method">${this.escapeHtml(savedMethod)}</div>` : '';
                         const byeLine = a2 === null ? '<div class="fight-method">Автоматический проход</div>' : '';
 
-                        // Единый блок пары рисуем в день боя (centerDay). День боя = максимум из дней
-                        // бойцов (поздний), чтобы ожидающий на день 2/3 был представлен в своей
-                        // вкладке, не «перетаскивая» бой на ранний день. Каждый боец подписан
-                        // своей меткой дня — видна независимость дней без разрушения сетки.
+                        // День боя — по дню каждого бойца отдельно (из жеребьёвки).
+                        // Если у бойцов пары ОДИНАКОВЫЙ день — обычный единый блок.
+                        // Если дни РАЗНЫЕ — каждый боец рисуется в свою вкладку дня,
+                        // а связь/кнопки победителя — в Поздний день (когда оба доступны).
+                        const ensureDayCol = (d) => {
+                            if (!daysMap[d]) daysMap[d] = { cat: {} };
+                            if (!daysMap[d].cat[weightClass]) {
+                                daysMap[d].cat[weightClass] = { slotCount: slots.length, cols: {} };
+                            }
+                            const ck = String(roundNum);
+                            if (!daysMap[d].cat[weightClass].cols[ck]) {
+                                daysMap[d].cat[weightClass].cols[ck] = `<div class="bracket-round-col" data-day="${d}">
+                                    <div class="round-label"><span class="day-tag">День ${d}</span> ${roundName}</div>`;
+                            }
+                            return { d, ck, wc: daysMap[d].cat[weightClass] };
+                        };
+
+                        if (roundNum === 1 && (dayA != null || dayB != null)) {
+                            const dA_ = dayA != null ? dayA : centerDay;
+                            const dB_ = dayB != null ? dayB : centerDay;
+                            const sameDay = (dA_ === dB_);
+                            // Поздний день — там кнопки победителя и связь пары
+                            const actionDay = Math.max(dA_, dB_);
+
+                            if (sameDay) {
+                                // Один единый блок на день (оба бойца + кнопки) — как обычная сетка
+                                const col = ensureDayCol(dA_);
+                                col.wc.cols[col.ck] += `
+                                    <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dA_}">
+                                        <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
+                                            <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
+                                            ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                            ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                        </div>
+                                        <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
+                                            <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
+                                            ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                            ${a2 !== null && roundNum === 1 && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                            ${a2 === null && roundNum === 1 ? `<button class="btn-add-opponent" onclick="App.addBracketOpponent(${tournament.id}, this, '${this.escapeHtml(weightClass)}')" title="Добавить соперника вручную">➕ соперник</button>` : ''}
+                                        </div>
+                                        ${buttonsHtml}
+                                        ${methodLine}
+                                        ${byeLine}
+                                    </div>`;
+                            } else {
+                                // Разные дни: каждый боец в свою вкладку, кнопки/связь — в поздний день
+                                const colA = ensureDayCol(dA_);
+                                // a1 в свою вкладку
+                                colA.wc.cols[colA.ck] += `
+                                    <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dA_}">
+                                        <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
+                                            <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
+                                            ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                            ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                        </div>
+                                        ${dA_ === actionDay && a2 !== null ? `${buttonsHtml}` : ''}
+                                        ${dA_ === actionDay ? `${methodLine}${byeLine}` : ''}
+                                    </div>`;
+                                // a2 в свою вкладку (если есть)
+                                if (a2 !== null) {
+                                    const colB = ensureDayCol(dB_);
+                                    colB.wc.cols[colB.ck] += `
+                                    <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dB_}">
+                                        <div class="fighter-row ${a2Class}" data-slot="${a2.slot != null ? a2.slot : ''}">
+                                            <span class="fighter-name">${this.escapeHtml(a2.name)}${a2.weight ? ` (${a2.weight} кг)` : ''}</span>
+                                            ${savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                            ${roundNum === 1 && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                        </div>
+                                        ${dB_ === actionDay ? `${buttonsHtml}${methodLine}${byeLine}` : ''}
+                                    </div>`;
+                                } else {
+                                    // a2 нет (BYE) — кнопка добавить соперника в слот a1
+                                    colA.wc.cols[colA.ck] = colA.wc.cols[colA.ck].replace(
+                                        /(<\/div>\s*<\/div>)$/,
+                                        `<button class="btn-add-opponent" onclick="App.addBracketOpponent(${tournament.id}, this, '${this.escapeHtml(weightClass)}')" title="Добавить соперника вручную">➕ соперник</button>$1`
+                                    );
+                                }
+                            }
+                            // Ячейка победителя в финале — в день боя (поздний)
+                            if (roundNum === maxRounds && savedWinner != null && a2 !== null) {
+                                const wname = (savedWinner === a1.athlete_id) ? a1.name : a2.name;
+                                const acol = ensureDayCol(actionDay);
+                                acol.wc.cols[acol.ck] += `<div class="fight-result-cell">Победитель: ${this.escapeHtml(wname)}</div>`;
+                            }
+                            return;
+                        }
+
+                        // Единый блок пары рисуем в день боя (centerDay) для раундов 2+ и BYE
                         if (!daysMap[centerDay]) daysMap[centerDay] = { cat: {} };
                         if (!daysMap[centerDay].cat[weightClass]) {
                             daysMap[centerDay].cat[weightClass] = { slotCount: slots.length, cols: {} };
