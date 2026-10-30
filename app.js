@@ -3035,7 +3035,8 @@ setupExport() {
                             ? `<div class="fight-method">${this.escapeHtml(savedMethod)}</div>` : '';
                         const byeLine = a2 === null ? '<div class="fight-method">Автоматический проход</div>' : '';
 
-                        // Вспомогательная: получить колонку раунда нужного дня
+                        // Вспомогательная: получить HTML-аккумулятор колонки раунда нужного дня.
+                        // Возвращает { day, colKey, cols, wc } — прямые ссылки для конкатенации.
                         const ensureCol = (d) => {
                             if (!daysMap[d]) daysMap[d] = { cat: {} };
                             if (!daysMap[d].cat[weightClass]) {
@@ -3046,7 +3047,7 @@ setupExport() {
                                 daysMap[d].cat[weightClass].cols[ck] = `<div class="bracket-round-col" data-day="${d}">
                                     <div class="round-label"><span class="day-tag">День ${d}</span> ${roundName}</div>`;
                             }
-                            return { day: d, colKey: ck };
+                            return { day: d, colKey: ck, cols: daysMap[d].cat[weightClass].cols };
                         };
 
                         // Каждый боец рисуется на СВОЕЙ вкладке дня (день из жеребьёвки).
