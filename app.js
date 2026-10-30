@@ -638,6 +638,33 @@ async openAbout() {
             });
         }
 
+        // Восстанавливаем сохранённую сортировку участников из localStorage
+        try {
+            if (this._participantsSort == null) {
+                this._participantsSort = localStorage.getItem('participants_sort') || 'none';
+            }
+        } catch (e) {
+            this._participantsSort = this._participantsSort || 'none';
+        }
+
+        // Универсальный обработчик клика по заголовкам таблицы участников.
+        const bindPartSort = (th, key) => {
+            if (!th || th.dataset.bound) return;
+            th.dataset.bound = '1';
+            th.addEventListener('click', () => {
+                const cur = this._participantsSort || 'none';
+                this._participantsSort = (cur === `asc:${key}`) ? 'none' : `asc:${key}`;
+                try {
+                    localStorage.setItem('participants_sort', this._participantsSort);
+                } catch (e) {}
+                this.renderParticipants();
+            });
+        };
+        bindPartSort(document.getElementById('participants-th-name'), 'name');
+        bindPartSort(document.getElementById('participants-th-weight'), 'weight');
+        bindPartSort(document.getElementById('participants-th-gender'), 'gender');
+        bindPartSort(document.getElementById('participants-th-birth'), 'birth');
+
         if (manualInputForm) {
             manualInputForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -847,9 +874,37 @@ async openAbout() {
                 );
             }
 
+            // Сортировка по выбранной колонке (ФИО / вес / пол / год рождения)
+            const sortVal = this._participantsSort || 'none';
+            if (sortVal !== 'none') {
+                const sortKey = sortVal.split(':')[1];
+                const lst = participants.slice();
+                if (sortKey === 'name') {
+                    lst.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'));
+                } else if (sortKey === 'weight') {
+                    lst.sort((a, b) => (a.weight || 0) - (b.weight || 0));
+                } else if (sortKey === 'gender') {
+                    lst.sort((a, b) => (a.gender || '').localeCompare(b.gender || '', 'ru'));
+                } else if (sortKey === 'birth') {
+                    lst.sort((a, b) => ((a.birth_year) || 0) - ((b.birth_year) || 0));
+                }
+                participants = lst;
+            }
+
             tbody.innerHTML = '';
             count.textContent = `Участников: ${participants.length}`;
             this._participantsCache = participants;
+
+            // Обновляем индикаторы сортировки (стрелка у активной колонки)
+            const activeKey = sortVal !== 'none' ? sortVal.split(':')[1] : '';
+            const setPartInd = (id, key) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = (activeKey === key) ? ' ▲' : '';
+            };
+            setPartInd('participants-name-indicator', 'name');
+            setPartInd('participants-weight-indicator', 'weight');
+            setPartInd('participants-gender-indicator', 'gender');
+            setPartInd('participants-birth-indicator', 'birth');
 
             // Список «Участники турнира» — строго по записям в БД (tournament_athletes)
             const selParts = document.getElementById('participant-athlete-select');
@@ -1660,10 +1715,10 @@ setupExport() {
         const genderFilter = document.getElementById('weighin-gender-filter');
         const select = document.getElementById('weighin-tournament-select');
 
-        // Восстанавливаем сохранённую сортировку по весу из localStorage
+        // Восстанавливаем сохранённую сортировку из localStorage
         try {
             if (this._weighinSort == null) {
-                this._weighinSort = localStorage.getItem('weighin_sort') === 'asc' ? 'asc' : 'none';
+                this._weighinSort = localStorage.getItem('weighin_sort') || 'none';
             }
         } catch (e) {
             this._weighinSort = this._weighinSort || 'none';
@@ -1714,17 +1769,31 @@ setupExport() {
         select.addEventListener('change', () => this.renderWeighin());
 
         const weightTh = document.getElementById('weighin-th-weight');
-        if (weightTh && !weightTh.dataset.bound) {
-            weightTh.dataset.bound = '1';
-            weightTh.addEventListener('click', () => {
+        const nameTh = document.getElementById('weighin-th-name');
+        const birthTh = document.getElementById('weighin-th-birth');
+
+        // Универсальный обработчик клика по заголовку сортировки.
+        // sortKey: 'name' | 'birth' | 'weight'. Формат _weighinSort: 'none' | 'asc:<key>'.
+        const bindSortTh = (th, key) => {
+            if (!th) return;
+            if (th.dataset.bound) return;
+            th.dataset.bound = '1';
+            th.addEventListener('click', () => {
                 const cur = this._weighinSort || 'none';
-                this._weighinSort = (cur === 'asc') ? 'none' : 'asc';
+                if (cur === `asc:${key}`) {
+                    this._weighinSort = 'none';         // повторный клик — сброс сортировки
+                } else {
+                    this._weighinSort = `asc:${key}`;   // сортировка по возрастанию выбранной колонки
+                }
                 try {
                     localStorage.setItem('weighin_sort', this._weighinSort);
                 } catch (e) {}
                 this.renderWeighin();
             });
-        }
+        };
+        bindSortTh(weightTh, 'weight');
+        bindSortTh(nameTh, 'name');
+        bindSortTh(birthTh, 'birth');
 
         const saveWordBtn = document.getElementById('weighin-save-word');
         if (saveWordBtn) {
@@ -1832,19 +1901,33 @@ setupExport() {
                 athletes = athletes.filter(a => a.gender === gender);
             }
 
-            // Сортировка по весу (возрастание), если включена
-            if (this._weighinSort === 'asc') {
-                athletes = athletes.slice().sort((a, b) => (a.weight || 0) - (b.weight || 0));
+            // Сортировка по выбранной колонке (ФИО / год рождения / вес), если активна
+            const sortVal = this._weighinSort || 'none';
+            if (sortVal !== 'none') {
+                const sortKey = sortVal.split(':')[1];
+                const lst = athletes.slice();
+                if (sortKey === 'name') {
+                    lst.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'));
+                } else if (sortKey === 'birth') {
+                    lst.sort((a, b) => ((a.birth_year) || 0) - ((b.birth_year) || 0));
+                } else if (sortKey === 'weight') {
+                    lst.sort((a, b) => (a.weight || 0) - (b.weight || 0));
+                }
+                athletes = lst;
             }
 
             const tbody = document.getElementById('weighin-list');
             const count = document.getElementById('weighin-count');
 
-            // Обновляем индикатор сортировки по весу
-            const indicator = document.getElementById('weighin-weight-indicator');
-            if (indicator) {
-                indicator.textContent = (this._weighinSort === 'asc') ? ' ▲' : '';
-            }
+            // Обновляем индикаторы сортировки (стрелка у активной колонки)
+            const activeKey = sortVal !== 'none' ? sortVal.split(':')[1] : '';
+            const setInd = (id, key) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = (activeKey === key) ? ' ▲' : '';
+            };
+            setInd('weighin-name-indicator', 'name');
+            setInd('weighin-birth-indicator', 'birth');
+            setInd('weighin-weight-indicator', 'weight');
 
             tbody.innerHTML = '';
             count.textContent = `Спортсменов: ${athletes.length}`;
@@ -2557,6 +2640,117 @@ setupExport() {
 
     // ==================== ЖЕРЕБЬЁВКА: РЕДАКТИРОВАНИЕ СОПЕРНИКОВ И ДНЕЙ ====================
 
+    // Ручное добавление соперника в пустой слот (BYE) в сетке.
+    // Открывает выбор спортсмена из той же весовой категории (ещё не в жеребьёвке),
+    // добавляет его новым слотом в жеребьёвку, после чего перестраивает сетку — пара получает второго бойца.
+    async addBracketOpponent(tournamentId, button, weightClass) {
+        const openMenu = document.querySelector('.athlete-picker');
+        if (openMenu) { openMenu.remove(); return; }
+
+        const athletesAll = await API.getAthletes();
+
+        // Спортсмены той же категории (пол + точный вес), ещё не состоящие в слотх этой категории
+        const wcMatch = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s+([\d.]+)\s*кг/);
+        const wcGender = wcMatch ? wcMatch[1] : null;
+        const wcWeight = wcMatch ? parseFloat(wcMatch[2]) : null;
+
+        // Текущие участники этой категории (чтобы исключить уже занятых)
+        const curLottery = await API.getLottery(tournamentId);
+        const inWc = new Set((curLottery[weightClass] || []).map(x => x.athlete_id));
+        const tournament = await API.getTournament(parseInt(tournamentId));
+        const tournamentIds = new Set(tournament.athlete_ids || []);
+
+        let available = athletesAll.filter(a => {
+            if (!tournamentIds.has(a.id)) return false;    // только участники турнира
+            if (inWc.has(a.id)) return false;               // ещё не в этой категории
+            if (wcGender && a.gender !== wcGender) return false;
+            if (wcWeight != null && a.weight != null) {
+                if (Math.abs(Number(a.weight) - wcWeight) > 0.001) return false;
+            }
+            return true;
+        });
+        if (available.length === 0 && wcMatch) {
+            available = athletesAll.filter(a => tournamentIds.has(a.id) && !inWc.has(a.id));
+        }
+        if (available.length === 0) {
+            toast('Нет доступных спортсменов для этой категории');
+            return;
+        }
+
+        // Меню выбора
+        const rect = button.getBoundingClientRect();
+        const menu = document.createElement('div');
+        menu.className = 'method-menu athlete-picker';
+        menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 320)) + 'px';
+        menu.style.top = (rect.bottom + 4) + 'px';
+        menu.innerHTML = `<div class="method-menu-title">Выберите соперника:</div>` +
+            available.map(a =>
+                `<button class="method-option" data-id="${a.id}">${this.escapeHtml(a.name)} (${a.weight} кг)</button>`
+            ).join('');
+        document.body.appendChild(menu);
+
+        const close = () => { if (menu.parentNode) menu.remove(); };
+        const onDocClick = (e) => { if (!menu.contains(e.target)) close(); };
+        const onEsc = (e) => { if (e.key === 'Escape') close(); };
+        setTimeout(() => {
+            document.addEventListener('click', onDocClick);
+            document.addEventListener('keydown', onEsc);
+        }, 0);
+
+        menu.addEventListener('click', async (ev) => {
+            const opt = ev.target.closest('.method-option');
+            if (!opt) return;
+            close();
+            document.removeEventListener('click', onDocClick);
+            document.removeEventListener('keydown', onEsc);
+
+            const newId = parseInt(opt.dataset.id);
+            if (!newId) return;
+            try {
+                // Загружаем текущую жеребьёвку, добавляем нового спортсмена новым слотом
+                const lottery = await API.getLottery(tournamentId);
+                const arr = lottery[weightClass] || [];
+                if (arr.some(x => x.athlete_id === newId)) {
+                    toast('Этот спортсмен уже в этой категории');
+                    return;
+                }
+                const nextSlot = arr.reduce((m, x) => Math.max(m, x.slot || 0), 0) + 1;
+                arr.push({
+                    athlete_id: newId,
+                    slot: nextSlot,
+                    day: 1,
+                    name: (athletesAll.find(x => x.id === newId) || {}).name || ''
+                });
+
+                // Сохраняем ВСЮ жеребьёвку целиком (с сохранением дней)
+                const payload = {};
+                for (const [wc, list] of Object.entries(lottery)) {
+                    payload[wc] = list.map(x => ({ athlete_id: x.athlete_id, slot: x.slot, day: x.day != null ? x.day : 1 }));
+                }
+                await API.saveLottery(tournamentId, payload);
+
+                // Очищаем результаты этой категории, чтобы пересчитались
+                await API.clearWeightClassResults(tournamentId, weightClass);
+                toast('✅ Соперник добавлен', 'success');
+
+                const updatedTournament = await API.getTournament(parseInt(tournamentId));
+                const keepDay = document.querySelector('#bracket-container .day-tab.active')?.dataset.day;
+                await this.renderBracket(updatedTournament);
+                if (keepDay) {
+                    const cont = document.getElementById('bracket-container');
+                    cont.querySelectorAll('.day-tab').forEach(t =>
+                        t.classList.toggle('active', String(t.dataset.day) === String(keepDay)));
+                    cont.querySelectorAll('.day-panel').forEach(p =>
+                        p.classList.toggle('active', String(p.dataset.day) === String(keepDay)));
+                }
+            } catch (err) {
+                toast('Ошибка при добавлении соперника: ' + err.message, 'error');
+            }
+        });
+    },
+
+    // ==================== ЖЕРЕБЬЁВКА: РЕДАКТИРОВАНИЕ СОПЕРНИКОВ И ДНЕЙ ====================
+
     // Замена спортсмена в жеребьёвке (тот же алгоритм, что и в сетке: выбор по весовой категории)
     async editLotteryAthlete(tournamentId, button, weightClass, slot, currentAthleteId) {
         const openMenu = document.querySelector('.athlete-picker');
@@ -3058,7 +3252,8 @@ setupExport() {
                                 <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
                                     <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
                                     ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                    ${roundNum === 1 && a2 !== null && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                    ${a2 !== null && roundNum === 1 && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                    ${a2 === null && roundNum === 1 ? `<button class="btn-add-opponent" onclick="App.addBracketOpponent(${tournament.id}, this, '${this.escapeHtml(weightClass)}')" title="Добавить соперника вручную">➕ соперник</button>` : ''}
                                 </div>
                                 ${buttonsHtml}
                                 ${methodLine}

@@ -3455,6 +3455,37 @@ def export_weighin_reglament():
             cursor.addnext(nt_el)       # таблица после параграфа/курсора
             cursor = nt_el
 
+    # --- Общий итог: строка в самом конце (после всех групп) ---
+    # Считаем по всем весовым категориям: всего участников, бои по каждому дню,
+    # общее число боёв. Вставляем итоговую строку в последнюю созданную таблицу данных.
+    if group_blocks:
+        _tot_ath = 0
+        _tot_by_day = [0] * total_days
+        for wc in order:
+            _slots = groups[wc]
+            _tot_ath += len(_slots)
+            _fd = _fights_by_day(wc)
+            for _di in range(len(_fd)):
+                _tot_by_day[_di] += _fd[_di]
+        _tot_fights = sum(_tot_by_day)
+        # последняя таблица в body (это последняя вставленная таблица данных)
+        _last_tbl_el = None
+        for _t in reversed(list(body.iter(_qn('w:tbl')))):
+            _last_tbl_el = _t
+            break
+        if _last_tbl_el is not None:
+            _row = _clone_row(tbl_sample_row) if tbl_sample_row is not None else None
+            if _row is not None:
+                _cells = _row.findall(_qn('w:tc'))
+                if len(_cells) >= 6:
+                    _set_cell_text(_cells[0], 'ИТОГО')
+                    _set_cell_text(_cells[1], str(_tot_ath))
+                    for _di in range(min(total_days, 3)):
+                        if _di < len(_cells) - 2:
+                            _set_cell_text(_cells[2 + _di], str(_tot_by_day[_di]) if _di < len(_tot_by_day) else '')
+                    _set_cell_text(_cells[5], str(_tot_fights))
+                _last_tbl_el.append(_row)
+
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)

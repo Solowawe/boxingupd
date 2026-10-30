@@ -910,15 +910,23 @@ td.editable:hover {
 #weighin-table .btn-save {
     padding: 6px 14px;
 }
-#weighin-th-weight.sortable {
+#weighin-table th.sortable,
+#participants-table th.sortable {
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
 }
-#weighin-th-weight.sortable:hover {
+#weighin-table th.sortable:hover,
+#participants-table th.sortable:hover {
     color: #ffd700;
 }
-#weighin-weight-indicator {
+#weighin-weight-indicator,
+#weighin-name-indicator,
+#weighin-birth-indicator,
+#participants-name-indicator,
+#participants-weight-indicator,
+#participants-gender-indicator,
+#participants-birth-indicator {
     font-size: 0.8em;
     color: #ffd700;
 }
@@ -934,6 +942,21 @@ td.editable:hover {
     margin-left: 4px;
     opacity: 0;
     transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.btn-add-opponent {
+    background: rgba(255, 215, 0, 0.12);
+    border: 1px dashed rgba(255, 215, 0, 0.5);
+    color: #ffd700;
+    cursor: pointer;
+    font-size: 0.8em;
+    padding: 4px 8px;
+    margin-left: 6px;
+    border-radius: 4px;
+    transition: background 0.2s ease;
+}
+.btn-add-opponent:hover {
+    background: rgba(255, 215, 0, 0.25);
 }
 
 /* Сетка соревнований */
