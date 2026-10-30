@@ -2641,15 +2641,15 @@ setupExport() {
     // ==================== ЖЕРЕБЬЁВКА: РЕДАКТИРОВАНИЕ СОПЕРНИКОВ И ДНЕЙ ====================
 
     // Ручное добавление соперника в пустой слот (BYE) в сетке.
-    // Открывает выбор спортсмена из той же весовой категории (ещё не в жеребьёвке),
-    // добавляет его новым слотом в жеребьёвку, после чего перестраивает сетку — пара получает второго бойца.
+    // Подбор спортсмена — строго как в жеребьёвке (editLotteryAthlete):
+    // та же весовая категория = тот же пол и ТОЧНЫЙ вес. Ещё не состоящие в этой категории.
     async addBracketOpponent(tournamentId, button, weightClass) {
         const openMenu = document.querySelector('.athlete-picker');
         if (openMenu) { openMenu.remove(); return; }
 
         const athletesAll = await API.getAthletes();
 
-        // Спортсмены той же категории (пол + точный вес), ещё не состоящие в слотх этой категории
+        // Только спортсмены того же пола и ТОЧНОГО веса категории (как в жеребьёвке)
         const wcMatch = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s+([\d.]+)\s*кг/);
         const wcGender = wcMatch ? wcMatch[1] : null;
         const wcWeight = wcMatch ? parseFloat(wcMatch[2]) : null;
@@ -2657,20 +2657,18 @@ setupExport() {
         // Текущие участники этой категории (чтобы исключить уже занятых)
         const curLottery = await API.getLottery(tournamentId);
         const inWc = new Set((curLottery[weightClass] || []).map(x => x.athlete_id));
-        const tournament = await API.getTournament(parseInt(tournamentId));
-        const tournamentIds = new Set(tournament.athlete_ids || []);
 
         let available = athletesAll.filter(a => {
-            if (!tournamentIds.has(a.id)) return false;    // только участники турнира
-            if (inWc.has(a.id)) return false;               // ещё не в этой категории
+            if (inWc.has(a.id)) return false;                 // уже в этой категории
             if (wcGender && a.gender !== wcGender) return false;
             if (wcWeight != null && a.weight != null) {
                 if (Math.abs(Number(a.weight) - wcWeight) > 0.001) return false;
             }
             return true;
         });
+        // Защита: если категория не распозналась — показываем всех, чтобы меню не было пустым
         if (available.length === 0 && wcMatch) {
-            available = athletesAll.filter(a => tournamentIds.has(a.id) && !inWc.has(a.id));
+            available = athletesAll.filter(a => !inWc.has(a.id));
         }
         if (available.length === 0) {
             toast('Нет доступных спортсменов для этой категории');
