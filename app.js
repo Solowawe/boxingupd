@@ -3052,13 +3052,11 @@ setupExport() {
                             <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${centerDay}">
                                 <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
                                     <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
-                                    ${(a1 && roundNum === 1 && a1.day != null) ? `<span class="fighter-day">День ${Math.min(tournamentDays, Math.max(1, parseInt(a1.day) || 1))}</span>` : ''}
                                     ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
                                     ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
                                 </div>
                                 <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
                                     <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
-                                    ${(a2 && a2 !== null && roundNum === 1 && a2.day != null) ? `<span class="fighter-day">День ${Math.min(tournamentDays, Math.max(1, parseInt(a2.day) || 1))}</span>` : ''}
                                     ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
                                     ${roundNum === 1 && a2 !== null && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
                                 </div>

@@ -3203,6 +3203,16 @@ def export_weighin_reglament():
             per_day[day - 1] += len(real)
         return per_day
 
+    def _find_wc_by_weight(weight):
+        """Находит исходную весовую категорию по цифре веса (для расчёта боёв)."""
+        if weight is None:
+            return None
+        for wc in order:
+            mm = _re.search(r'(\d+(?:\.\d+)?)', wc or '')
+            if mm and mm.group(1) == str(weight):
+                return wc
+        return None
+
     def _set_para_text(para_el, mapping):
         """Заменяет маркеры в абзаце, сохраняя стиль первого run."""
         runs = para_el.findall(_qn('w:r'))
@@ -3289,19 +3299,18 @@ def export_weighin_reglament():
             _np.remove(_tr)
         return _np
 
-    def _fill_row(tbl_el, wc):
+    def _fill_row(tbl_el, weight, slots, wc):
         # берём строку-образец из шапки таблицы (клонируем последнюю строку исходной Табл1)
         _sample = tbl_sample_row
         row = _clone_row(_sample)
-        _slots = sorted(groups[wc], key=lambda x: x['slot'])
+        _slots = sorted(slots, key=lambda x: x['slot'])
         cnt = len(_slots)
+        # бои по дням — из всей категории веса (wc)
         _fights = _fights_by_day(wc)
         total_fights = sum(_fights)
-        mm = _re.search(r'(\d+(?:\.\d+)?)', wc or '')
-        _weight = mm.group(1) if mm else wc
         cells = row.findall(_qn('w:tc'))
         if len(cells) >= 6:
-            _set_cell_text(cells[0], _weight)
+            _set_cell_text(cells[0], weight)
             _set_cell_text(cells[1], str(cnt))
             for di in range(min(total_days, 3)):
                 if di < len(cells) - 2:
@@ -3316,20 +3325,33 @@ def export_weighin_reglament():
         if len(_trs) >= 2:
             tbl_sample_row = _clone_row(_trs[-1])
 
-    # --- Группировка категорий по (пол, пара лет) ---
+    # --- Группировка по (пол, пара лет). Важно: участники распределяются по парам
+    # по ИХ годём рождения, а внутри пары группируются по весу. Один и тот же вес
+    # может встретиться в разных парах (если в нём бойцы разных лет), поэтому вес
+    # повторяется, но количество — только участники с годом в этой паре.
     def _pair_groups(wcs):
-        """Возвращает список (label_years, [wc]), разбивая годы на пары (yi-yi-1).
-        Порядок — от большего года к меньшему. Одиночный год — отдельная группа."""
+        """Возвращает список (label_years, {weight: [slots]}).
+
+        Годы всех участников этих категорий разбиваются на пары от большего
+        к меньшему (2016-2015, 2014-2013, ...). Каждый слот относится к той паре,
+        в которую попадает год рождения его спортсмена. Одиночный год — своя пара.
+        """
         if not wcs:
             return []
-        # все годы всех категорий
+        # собрать все годы (по слотам, а не по категории)
         all_years = set()
         for wc in wcs:
-            all_years.update(_cat_years.get(wc) or [])
+            for s in groups[wc]:
+                _y = _slot_year(s)
+                if _y is not None:
+                    all_years.add(_y)
         if not all_years:
-            return [('', wcs)]
-        years_sorted = sorted(all_years, reverse=True)  # 2016,2015,2014,...
-        # строим пары (больший, меньший): (years[0],years[1]) и т.д.
+            # нет годов — одна «пустая» группа со всеми
+            agg = {}
+            for wc in wcs:
+                agg.setdefault(wc, []).extend(groups[wc])
+            return [('', agg)]
+        years_sorted = sorted(all_years, reverse=True)
         pairs = []
         i = 0
         while i < len(years_sorted):
@@ -3339,34 +3361,26 @@ def export_weighin_reglament():
             else:
                 pairs.append((years_sorted[i], None))
                 i += 1
-        # распределяем категории по парам: категория попадает в пару, содержащую
-        # её МЛАДШИЙ (максимальный) год рождения; категории с одним годом — в пару этого года.
-        # Строгая проверка «все годы в паре» даёт искусственные хвостовые группы — не используем.
-        buckets = {i: [] for i in range(len(pairs))}
+        # под каждую пару собираем слоты с годом в диапазоне пары
+        bucket_by_wc = {i: {} for i in range(len(pairs))}   # i -> {weight: [slots]}
         for wc in wcs:
-            ys = _cat_years.get(wc) or []
-            if not ys:
-                continue
-            y_max = max(ys)   # младший участник = верхняя граница возрастной группы
-            # ищем пару, в которую попадает y_max и (по возможности) весь диапазон
-            best = None
-            for i, (yhi, ylo) in enumerate(pairs):
-                low = ylo if ylo is not None else yhi
-                if low <= y_max <= yhi:
-                    # приоритет паре, покрывающей весь диапазон; иначе — ближайшей
-                    if best is None or all(low <= y <= yhi for y in ys):
-                        best = i
-                        if all(low <= y <= yhi for y in ys):
-                            break
-            if best is None:
-                # fallback: пара с ближайшим верхним годом к y_max
-                best = min(range(len(pairs)), key=lambda i: abs((pairs[i][0]) - y_max))
-            buckets[best].append(wc)
+            _w = _re.search(r'(\d+(?:\.\d+)?)', wc or '')
+            _weight = _w.group(1) if _w else wc
+            for s in groups[wc]:
+                _y = _slot_year(s)
+                if _y is None:
+                    continue
+                # ищем пару, в которую входит _y
+                for idx, (yhi, ylo) in enumerate(pairs):
+                    low = ylo if ylo is not None else yhi
+                    if low <= _y <= yhi:
+                        bucket_by_wc[idx].setdefault(_weight, []).append(s)
+                        break
         result = []
-        for i, (yhi, ylo) in enumerate(pairs):
+        for idx, (yhi, ylo) in enumerate(pairs):
             label = str(yhi) if ylo is None else f'{yhi}-{ylo}'
-            if buckets[i]:
-                result.append((label, buckets[i]))
+            if bucket_by_wc[idx]:
+                result.append((label, bucket_by_wc[idx]))
         return result
 
     # --- Собираем готовый перечень групп: (gender, label, [wc]) в нужном порядке ---
@@ -3413,12 +3427,13 @@ def export_weighin_reglament():
             if _c.tag == _qn('w:sectPr'):
                 _append_here = _c
                 break
-        _last = None
-        for gender, label, members in group_blocks:
+        for gender, label, weight_map in group_blocks:
             np_el = _make_group_para(gender, label)
             nt_el = _new_data_table()
-            for wc in members:
-                _fill_row(nt_el, wc)
+            # weight_map: {вес: [слоты этой пары]} — сортируем по весу
+            for weight, slots in sorted(weight_map.items(), key=lambda kv: float(kv[0] or 0)):
+                _wc = _find_wc_by_weight(weight)
+                _fill_row(nt_el, weight, slots, _wc)
             if _append_here is not None:
                 _append_here.addprevious(np_el) if np_el is not None else None
                 if np_el is not None:
@@ -3428,11 +3443,12 @@ def export_weighin_reglament():
                 body.append(nt_el)
     else:
         cursor = anchor_before
-        for gender, label, members in group_blocks:
+        for gender, label, weight_map in group_blocks:
             np_el = _make_group_para(gender, label)
             nt_el = _new_data_table()
-            for wc in members:
-                _fill_row(nt_el, wc)
+            for weight, slots in sorted(weight_map.items(), key=lambda kv: float(kv[0] or 0)):
+                _wc = _find_wc_by_weight(weight)
+                _fill_row(nt_el, weight, slots, _wc)
             if np_el is not None:
                 cursor.addnext(np_el)   # параграф после курсора
                 cursor = np_el
