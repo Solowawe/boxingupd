@@ -2168,7 +2168,7 @@ setupExport() {
             }
             this.saveDefaultTournament(id);
             try {
-                await this.performLottery(id);
+                await this.performLottery(id, false);
             } catch (err) {
                 toast('Ошибка жеребьевки: ' + err.message);
             }
@@ -2217,9 +2217,24 @@ setupExport() {
         return slots;  // массив длины size, null = бай
     },
 
-    async performLottery(tournamentId) {
+    async performLottery(tournamentId, preserve = true) {
         const container = document.getElementById('lottery-container');
         const results = document.getElementById('lottery-results');
+
+        // Если жеребьёвка уже сохранена в БД — показываем её как есть (с сохранёнными днями),
+        // НЕ пересоздавая заново. Пересоздание (preserve=false) только при явном нажатии
+        // «Провести жеребьевку» или «Перемешать».
+        if (preserve) {
+            try {
+                const saved = await API.getLottery(tournamentId);
+                if (saved && Object.keys(saved).length > 0) {
+                    const t = await API.getTournament(tournamentId);
+                    return this.renderLotteryResults(t, saved);
+                }
+            } catch (e) {
+                console.error('Ошибка загрузки сохранённой жеребьёвки:', e);
+            }
+        }
 
         // Получаем данные соревнования и спортсменов
         const [tournament, athletes] = await Promise.all([
@@ -2290,9 +2305,20 @@ setupExport() {
         }
 
         // Рендерим результаты
+        return this.renderLotteryResults(tournament, lotteryResults);
+    },
+
+    // Отрисовка результатов жеребьёвки (используется и для сохранённой из БД, и для новой)
+    renderLotteryResults(tournament, lotteryResults) {
+        const container = document.getElementById('lottery-container');
+        const results = document.getElementById('lottery-results');
+        if (!results) return;
+        const tournamentId = tournament.id;
+        const athleteCount = Object.values(lotteryResults).reduce((s, arr) => s + arr.length, 0);
+
         container.innerHTML = `
             <div class="info" style="margin:15px 0;">
-                <strong>${tournament.name}</strong> — ${tournamentAthletes.length} спортсменов распределено по ${Object.keys(lotteryResults).length} категориям
+                <strong>${this.escapeHtml(tournament.name)}</strong> — ${athleteCount} спортсменов распределено по ${Object.keys(lotteryResults).length} категориям
                 <button class="btn-secondary" onclick="App.refreshLottery(${tournamentId})" style="margin-left:10px;">🔄 Перемешать</button>
             </div>
         `;
@@ -2323,7 +2349,8 @@ setupExport() {
                     </thead>
                     <tbody>`;
             athletes.forEach(a => {
-                const daySelect = `<select class="lottery-day-select" data-slot="${a.slot}">${dayOptions}</select>`;
+                const curDay = (a.day != null) ? parseInt(a.day) : 1;
+                const daySelect = `<select class="lottery-day-select" data-slot="${a.slot}">${this._dayOptions(dayOptions, curDay)}</select>`;
                 html += `
                         <tr data-athlete-id="${a.athlete_id}" data-weight-class="${weightClass}">
                             <td><strong>${a.slot}</strong></td>
@@ -2353,6 +2380,15 @@ setupExport() {
                 await this.saveLotteryFromUI();
             });
         });
+    },
+
+    // Возвращает options с выбранным нужным днём
+    _dayOptions(optionsHtml, selectedDay) {
+        const opts = [];
+        for (let i = 1; i <= optionsHtml.split('</option>').length - 1; i++) {
+            opts.push(`<option value="${i}"${i === selectedDay ? ' selected' : ''}>День ${i}</option>`);
+        }
+        return opts.join('');
     },
 
     async refreshLottery(tournamentId) {
@@ -2399,7 +2435,7 @@ setupExport() {
         });
 
         await API.saveLottery(tournamentId, lotteryResults);
-        await this.performLottery(tournamentId);
+        await this.performLottery(tournamentId, false);
     },
 
     async editBracketAthlete(tournamentId, button, weightClass, slot, currentAthleteId) {
@@ -2489,7 +2525,7 @@ setupExport() {
                 // Сохраняем ВСЮ жеребьёвку целиком (иначе saveLottery удалит остальные категории)
                 const payload = {};
                 for (const [wc, list] of Object.entries(lottery)) {
-                    payload[wc] = list.map(x => ({ athlete_id: x.athlete_id, slot: x.slot }));
+                    payload[wc] = list.map(x => ({ athlete_id: x.athlete_id, slot: x.slot, day: x.day != null ? x.day : 1 }));
                 }
                 await API.saveLottery(tournamentId, payload);
 
@@ -2846,7 +2882,10 @@ setupExport() {
             }
             const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.days) || 1));
             for (const weightClass of sortedWeightClasses) {
-                // Сортируем бойцов по слоту (slot из жеребьевки)
+                // Сортируем бойцов по слоту (slot из жеребьевки).
+                // Источник истины — жеребьёвка (БД): здесь уже сохранены и порядок слотов,
+                // и день каждого бойца. Сетка только ОТОБРАЖАЕТ эти данные и не пересчитывает
+                // пары и дни заново — бойцы привязаны друг к другу только весовой категорией.
                 const slots = [...lottery[weightClass]].sort((a, b) => a.slot - b.slot);
 
                 // Строим раунды: раунд 1 — пары из жеребьевки, далее — победители
@@ -2880,7 +2919,15 @@ setupExport() {
                 let roundNum = 1;
                 while (true) {
                     const prev = rounds[rounds.length - 1];
-                    const winners = prev.map(f => f.result ? f.result.winner_id : null);
+                    // Победитель каждого боя — объект бойца (с его днём), чтобы день
+                    // «протаскивался» в следующий раунд и победитель вставал в слот ожидающего.
+                    const winners = prev.map(f => {
+                        if (!f.result || f.result.winner_id == null) return null;
+                        const wId = fid(f.result.winner_id);
+                        if (f.a1 && fid(f.a1) === wId) return f.a1;
+                        if (f.a2 && f.a2 !== null && fid(f.a2) === wId) return f.a2;
+                        return null;
+                    });
                     // Если в предыдущем раунде ещё не все бои завершены — дальше не строим
                     if (winners.some(w => w === null)) break;
                     if (winners.length <= 1) break;
@@ -2941,22 +2988,21 @@ setupExport() {
                     //  - 1-й раунд — из жеребьёвки (день слота), ограниченный числом дней
                     //  - последующие раунды — по номеру раунда (когда сыграны предыдущие)
                     roundFights.forEach(f => {
-                        let dayNum;
-                        if (roundNum === 1 && f.a1 && typeof f.a1 === 'object' && f.a1.day != null) {
-                            dayNum = Math.min(tournamentDays, Math.max(1, parseInt(f.a1.day) || 1));
-                        } else {
-                            dayNum = this.roundToDay(roundNum, maxRounds, tournamentDays);
-                        }
-                        if (!daysMap[dayNum]) daysMap[dayNum] = { cat: {} };
-                        if (!daysMap[dayNum].cat[weightClass]) {
-                            daysMap[dayNum].cat[weightClass] = { slotCount: slots.length, cols: {} };
-                        }
-                        // Колонка раунда создаётся на день — ключ по номеру раунда
-                        const colKey = String(roundNum);
-                        if (!daysMap[dayNum].cat[weightClass].cols[colKey]) {
-                            daysMap[dayNum].cat[weightClass].cols[colKey] = `<div class="bracket-round-col" data-day="${dayNum}">
-                                <div class="round-label"><span class="day-tag">День ${dayNum}</span> ${roundName}</div>`;
-                        }
+                        const dOf = (o) => (o && o.day != null)
+                            ? Math.min(tournamentDays, Math.max(1, parseInt(o.day) || 1)) : 1;
+                        // Дни участников пары (из жеребьёвки в БД). Источник истины — жеребьёвка:
+                        // бойцы привязаны друг к другу ТОЛЬКО весовой категорией. Каждый боец
+                        // рисуется на СВОЕЙ вкладке дня; смена дня у одного бойца НЕ тянет другого.
+                        const dayA = (roundNum === 1 && f.a1 && typeof f.a1 === 'object')
+                            ? dOf(f.a1) : null;
+                        const dayB = (roundNum === 1 && f.a2 && f.a2 !== null && typeof f.a2 === 'object')
+                            ? dOf(f.a2) : null;
+                        // Колонка (раунд), куда попадает «центр» пары (для блока действий).
+                        // В 1-м раунде бой происходит в ПОЗДНИЙ (максимальный) из дней пары —
+                        // к этому моменту оба бойца уже доступны (ожидающий ждёт в свой день).
+                        const centerDay = (dayA != null || dayB != null)
+                            ? Math.max(dayA != null ? dayA : dayB, dayB != null ? dayB : dayA)
+                            : this.roundToDay(roundNum, maxRounds, tournamentDays);
 
                         // Разрешаем и объекты бойцов, и ID (из победителей предыдущего раунда)
                         const a1 = (typeof f.a1 === 'object') ? f.a1 : { athlete_id: f.a1, name: this.getAthleteName(f.a1), weight: '' };
@@ -2989,27 +3035,93 @@ setupExport() {
                             ? `<div class="fight-method">${this.escapeHtml(savedMethod)}</div>` : '';
                         const byeLine = a2 === null ? '<div class="fight-method">Автоматический проход</div>' : '';
 
-                        daysMap[dayNum].cat[weightClass].cols[colKey] += `
-                            <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dayNum}">
-                                <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
-                                    <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
-                                    ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                    ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                </div>
-                                <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
-                                    <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
-                                    ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                    ${roundNum === 1 && a2 !== null && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                </div>
-                                ${buttonsHtml}
-                                ${methodLine}
-                                ${byeLine}
-                            </div>`;
-                        // Ячейка победителя в финале (бой за 1-2 места) — внизу слота, размером со слот
-                        if (roundNum === maxRounds && savedWinner != null && a2 !== null) {
-                            const wname = (savedWinner === a1.athlete_id) ? a1.name : a2.name;
-                            daysMap[dayNum].cat[weightClass].cols[colKey] +=
-                                `<div class="fight-result-cell">Победитель: ${this.escapeHtml(wname)}</div>`;
+                        // Вспомогательная: получить колонку раунда нужного дня
+                        const ensureCol = (d) => {
+                            if (!daysMap[d]) daysMap[d] = { cat: {} };
+                            if (!daysMap[d].cat[weightClass]) {
+                                daysMap[d].cat[weightClass] = { slotCount: slots.length, cols: {} };
+                            }
+                            const ck = String(roundNum);
+                            if (!daysMap[d].cat[weightClass].cols[ck]) {
+                                daysMap[d].cat[weightClass].cols[ck] = `<div class="bracket-round-col" data-day="${d}">
+                                    <div class="round-label"><span class="day-tag">День ${d}</span> ${roundName}</div>`;
+                            }
+                            return { day: d, colKey: ck };
+                        };
+
+                        // Каждый боец рисуется на СВОЕЙ вкладке дня (день из жеребьёвки).
+                        // В 1-м раунде: a1 -> его день, a2 -> его день (независимо). Связь пары
+                        // остаётся в данных (pairIndex), действия/победитель — в день боя.
+                        if (roundNum === 1 && (dayA != null || dayB != null)) {
+                            const dayA_ = dayA != null ? dayA : centerDay;
+                            const dayB_ = dayB != null ? dayB : centerDay;
+                            const colA = ensureCol(dayA_);
+                            let colB = null;
+                            if (a2 !== null) colB = ensureCol(dayB_);
+                            // Блок первого бойца в его день
+                            colA.cols[colA.colKey] += `
+                                <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dayA_}">
+                                    <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
+                                        <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
+                                        ${(a1 && a1.day != null) ? `<span class="fighter-day">День ${Math.min(tournamentDays, Math.max(1, parseInt(a1.day) || 1))}</span>` : ''}
+                                        ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                        ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                    </div>`;
+                            if (a2 !== null) {
+                                colB.cols[colB.colKey] += `
+                                    <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dayB_}">
+                                    <div class="fighter-row ${a2Class}" data-slot="${a2.slot != null ? a2.slot : ''}">
+                                        <span class="fighter-name">${this.escapeHtml(a2.name)}${a2.weight ? ` (${a2.weight} кг)` : ''}</span>
+                                        ${(a2 && a2.day != null) ? `<span class="fighter-day">День ${Math.min(tournamentDays, Math.max(1, parseInt(a2.day) || 1))}</span>` : ''}
+                                        ${savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                        ${roundNum === 1 && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                    </div>`;
+                                // Действия (выбор победителя) — на день боя (ПОЗДНИЙ из дней пары,
+                                // когда оба бойца доступны; центр пары). Ранний боец просто ждёт.
+                                const actCol = dayA_ >= dayB_ ? colA : colB;
+                                actCol.cols[actCol.colKey] += `${buttonsHtml}${methodLine}</div>`;
+                            } else {
+                                colA.cols[colA.colKey] += `${buttonsHtml}${methodLine}${byeLine}</div>`;
+                            }
+                            // Ячейка победителя в финале — в день боя (поздний)
+                            if (roundNum === maxRounds && savedWinner != null && a2 !== null) {
+                                const wname = (savedWinner === a1.athlete_id) ? a1.name : a2.name;
+                                const actColF = dayA_ >= dayB_ ? colA : colB;
+                                actColF.cols[actColF.colKey] +=
+                                    `<div class="fight-result-cell">Победитель: ${this.escapeHtml(wname)}</div>`;
+                            }
+                            return; // продолжить со следующей пары
+                        }
+
+                        // Прочие раунды (2+) и BYE — единый блок в день боя
+                        {
+                            ensureCol(centerDay);
+                            const col = { day: centerDay, colKey: String(roundNum) };
+                            if (!daysMap[centerDay].cat[weightClass].cols[String(roundNum)]) {
+                                daysMap[centerDay].cat[weightClass].cols[String(roundNum)] = `<div class="bracket-round-col" data-day="${centerDay}">
+                                    <div class="round-label"><span class="day-tag">День ${centerDay}</span> ${roundName}</div>`;
+                            }
+                            daysMap[centerDay].cat[weightClass].cols[String(roundNum)] += `
+                                <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${centerDay}">
+                                    <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
+                                        <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
+                                        ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                        ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                    </div>
+                                    <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
+                                        <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
+                                        ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                        ${roundNum === 1 && a2 !== null && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                    </div>
+                                    ${buttonsHtml}
+                                    ${methodLine}
+                                    ${byeLine}
+                                </div>`;
+                            if (roundNum === maxRounds && savedWinner != null && a2 !== null) {
+                                const wname = (savedWinner === a1.athlete_id) ? a1.name : a2.name;
+                                daysMap[centerDay].cat[weightClass].cols[String(roundNum)] +=
+                                    `<div class="fight-result-cell">Победитель: ${this.escapeHtml(wname)}</div>`;
+                            }
                         }
                     });
                 });

@@ -1,5 +1,5 @@
 {
-  "version": "1.0.59",
+  "version": "1.0.60",
   "files": [
     "app.js",
     "index.html",
@@ -9,7 +9,7 @@
     "database.py",
     "app.py",
     "requirements.txt",
-    "update-manifest.json"
+    "update-manifest.json",
+    "reglament_tmp.docx"
   ]
 }
-

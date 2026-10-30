@@ -548,6 +548,15 @@ td.editable:hover {
     margin-bottom: 4px;
 }
 
+.fighter-day {
+    font-size: 0.8em;
+    color: #ffd700;
+    opacity: 0.85;
+    margin-left: 6px;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
 .fighter-row.winner {
     background: rgba(46, 204, 113, 0.15);
     color: #2ecc71;
