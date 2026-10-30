@@ -3035,94 +3035,41 @@ setupExport() {
                             ? `<div class="fight-method">${this.escapeHtml(savedMethod)}</div>` : '';
                         const byeLine = a2 === null ? '<div class="fight-method">Автоматический проход</div>' : '';
 
-                        // Вспомогательная: получить HTML-аккумулятор колонки раунда нужного дня.
-                        // Возвращает { day, colKey, cols, wc } — прямые ссылки для конкатенации.
-                        const ensureCol = (d) => {
-                            if (!daysMap[d]) daysMap[d] = { cat: {} };
-                            if (!daysMap[d].cat[weightClass]) {
-                                daysMap[d].cat[weightClass] = { slotCount: slots.length, cols: {} };
-                            }
-                            const ck = String(roundNum);
-                            if (!daysMap[d].cat[weightClass].cols[ck]) {
-                                daysMap[d].cat[weightClass].cols[ck] = `<div class="bracket-round-col" data-day="${d}">
-                                    <div class="round-label"><span class="day-tag">День ${d}</span> ${roundName}</div>`;
-                            }
-                            return { day: d, colKey: ck, cols: daysMap[d].cat[weightClass].cols };
-                        };
-
-                        // Каждый боец рисуется на СВОЕЙ вкладке дня (день из жеребьёвки).
-                        // В 1-м раунде: a1 -> его день, a2 -> его день (независимо). Связь пары
-                        // остаётся в данных (pairIndex), действия/победитель — в день боя.
-                        if (roundNum === 1 && (dayA != null || dayB != null)) {
-                            const dayA_ = dayA != null ? dayA : centerDay;
-                            const dayB_ = dayB != null ? dayB : centerDay;
-                            const colA = ensureCol(dayA_);
-                            let colB = null;
-                            if (a2 !== null) colB = ensureCol(dayB_);
-                            // Блок первого бойца в его день
-                            colA.cols[colA.colKey] += `
-                                <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dayA_}">
-                                    <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
-                                        <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
-                                        ${(a1 && a1.day != null) ? `<span class="fighter-day">День ${Math.min(tournamentDays, Math.max(1, parseInt(a1.day) || 1))}</span>` : ''}
-                                        ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                        ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                    </div>`;
-                            if (a2 !== null) {
-                                colB.cols[colB.colKey] += `
-                                    <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dayB_}">
-                                    <div class="fighter-row ${a2Class}" data-slot="${a2.slot != null ? a2.slot : ''}">
-                                        <span class="fighter-name">${this.escapeHtml(a2.name)}${a2.weight ? ` (${a2.weight} кг)` : ''}</span>
-                                        ${(a2 && a2.day != null) ? `<span class="fighter-day">День ${Math.min(tournamentDays, Math.max(1, parseInt(a2.day) || 1))}</span>` : ''}
-                                        ${savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                        ${roundNum === 1 && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                    </div>`;
-                                // Действия (выбор победителя) — на день боя (ПОЗДНИЙ из дней пары,
-                                // когда оба бойца доступны; центр пары). Ранний боец просто ждёт.
-                                const actCol = dayA_ >= dayB_ ? colA : colB;
-                                actCol.cols[actCol.colKey] += `${buttonsHtml}${methodLine}</div>`;
-                            } else {
-                                colA.cols[colA.colKey] += `${buttonsHtml}${methodLine}${byeLine}</div>`;
-                            }
-                            // Ячейка победителя в финале — в день боя (поздний)
-                            if (roundNum === maxRounds && savedWinner != null && a2 !== null) {
-                                const wname = (savedWinner === a1.athlete_id) ? a1.name : a2.name;
-                                const actColF = dayA_ >= dayB_ ? colA : colB;
-                                actColF.cols[actColF.colKey] +=
-                                    `<div class="fight-result-cell">Победитель: ${this.escapeHtml(wname)}</div>`;
-                            }
-                            return; // продолжить со следующей пары
+                        // Единый блок пары рисуем в день боя (centerDay). День боя = максимум из дней
+                        // бойцов (ожидающий, перенесённый на день 2, ждёт на своей вкладке,
+                        // не утягивая бой на день 1). Каждый боец подписан своей меткой дня.
+                        if (!daysMap[centerDay]) daysMap[centerDay] = { cat: {} };
+                        if (!daysMap[centerDay].cat[weightClass]) {
+                            daysMap[centerDay].cat[weightClass] = { slotCount: slots.length, cols: {} };
                         }
-
-                        // Прочие раунды (2+) и BYE — единый блок в день боя
-                        {
-                            ensureCol(centerDay);
-                            const col = { day: centerDay, colKey: String(roundNum) };
-                            if (!daysMap[centerDay].cat[weightClass].cols[String(roundNum)]) {
-                                daysMap[centerDay].cat[weightClass].cols[String(roundNum)] = `<div class="bracket-round-col" data-day="${centerDay}">
-                                    <div class="round-label"><span class="day-tag">День ${centerDay}</span> ${roundName}</div>`;
-                            }
-                            daysMap[centerDay].cat[weightClass].cols[String(roundNum)] += `
-                                <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${centerDay}">
-                                    <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
-                                        <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
-                                        ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                        ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                    </div>
-                                    <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
-                                        <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
-                                        ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                        ${roundNum === 1 && a2 !== null && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                    </div>
-                                    ${buttonsHtml}
-                                    ${methodLine}
-                                    ${byeLine}
-                                </div>`;
-                            if (roundNum === maxRounds && savedWinner != null && a2 !== null) {
-                                const wname = (savedWinner === a1.athlete_id) ? a1.name : a2.name;
-                                daysMap[centerDay].cat[weightClass].cols[String(roundNum)] +=
-                                    `<div class="fight-result-cell">Победитель: ${this.escapeHtml(wname)}</div>`;
-                            }
+                        const colKey = String(roundNum);
+                        if (!daysMap[centerDay].cat[weightClass].cols[colKey]) {
+                            daysMap[centerDay].cat[weightClass].cols[colKey] = `<div class="bracket-round-col" data-day="${centerDay}">
+                                <div class="round-label"><span class="day-tag">День ${centerDay}</span> ${roundName}</div>`;
+                        }
+                        daysMap[centerDay].cat[weightClass].cols[colKey] += `
+                            <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${centerDay}">
+                                <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
+                                    <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
+                                    ${(a1 && roundNum === 1 && a1.day != null) ? `<span class="fighter-day">День ${Math.min(tournamentDays, Math.max(1, parseInt(a1.day) || 1))}</span>` : ''}
+                                    ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                    ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                </div>
+                                <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
+                                    <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
+                                    ${(a2 && a2 !== null && roundNum === 1 && a2.day != null) ? `<span class="fighter-day">День ${Math.min(tournamentDays, Math.max(1, parseInt(a2.day) || 1))}</span>` : ''}
+                                    ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
+                                    ${roundNum === 1 && a2 !== null && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
+                                </div>
+                                ${buttonsHtml}
+                                ${methodLine}
+                                ${byeLine}
+                            </div>`;
+                        // Ячейка победителя в финале (бой за 1-2 места) — внизу слота, размером со слот
+                        if (roundNum === maxRounds && savedWinner != null && a2 !== null) {
+                            const wname = (savedWinner === a1.athlete_id) ? a1.name : a2.name;
+                            daysMap[centerDay].cat[weightClass].cols[colKey] +=
+                                `<div class="fight-result-cell">Победитель: ${this.escapeHtml(wname)}</div>`;
                         }
                     });
                 });
