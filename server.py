@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Flask API server for Boxing Competition Tracker
 """
@@ -1389,7 +1389,8 @@ def update_status():
     try:
         manifest_url = f'https://raw.githubusercontent.com/{UPDATE_OWNER}/{UPDATE_REPO}/{UPDATE_BRANCH}/{UPDATE_MANIFEST}'
         raw = _fetch_url(manifest_url, timeout=20)
-        manifest = json.loads(raw.decode('utf-8'))
+        # utf-8-sig пропускает BOM в начале файла, если он есть
+        manifest = json.loads(raw.decode('utf-8-sig'))
     except Exception as e:
         return jsonify({
             'configured': True, 'owner': UPDATE_OWNER, 'repo': UPDATE_REPO, 'branch': UPDATE_BRANCH,
@@ -1422,7 +1423,8 @@ def update_apply():
     app_dir = Path(ASSETS_DIR)
 
     try:
-        manifest = json.loads(_fetch_url(f'{base}/{UPDATE_MANIFEST}', timeout=20).decode('utf-8'))
+        # utf-8-sig пропускает BOM в начале файла, если он есть
+        manifest = json.loads(_fetch_url(f'{base}/{UPDATE_MANIFEST}', timeout=20).decode('utf-8-sig'))
     except Exception as e:
         return jsonify({'error': f'Не удалось получить манифест: {e}'}), 500
 
