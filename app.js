@@ -2271,9 +2271,10 @@ setupExport() {
     },
 
     _pairAndPlaceLottery(athletes) {
-        // Олимпийская система (seeding): сортируем по весу → по возрасту (сильнейшие = нижние номера),
-        // затем расставляем по стандартной турнирной сетке, чтобы 1-й и 2-й сеяные
-        // встречались только в финале, а сильнейшие не пересекались в ранних раундах.
+        // Последовательная система: сортируем по весу → по возрасту, затем расставляем
+        // по слотам подряд (слот1, слот2, ...). Пары формируются последовательно:
+        // 1-2, 3-4, 5-6, ... Если число нечётное — последний боец остаётся без пары (бай),
+        // он автоматически переходит в следующий раунд (ждёт победителя).
         athletes.sort((a, b) => a.weight - b.weight || a.birth_year - b.birth_year);
 
         const n = athletes.length;
@@ -2281,23 +2282,68 @@ setupExport() {
         // Один спортсмен без соперника — попадёт в жеребьёвку и станет победителем автоматом
         if (n === 1) return [athletes[0]];
 
-        function seedOrder(m) {
-            // m — степень двойки; стандартный порядок расстановки сеянных (1 и 2 в разных половинах)
-            if (m <= 2) return [1, 2].slice(0, m);
-            const half = seedOrder(m / 2);
-            const order = [];
-            for (let i = 0; i < half.length; i++) {
-                order.push(half[i]);        // верхняя половина
-                order.push(m + 1 - half[i]); // зеркальная нижняя
-            }
-            return order;
+        // Ближайшая сверху степень двойки (размер полной сетки)
+        const size = 1 << Math.ceil(Math.log2(n));
+        const slots = [];
+        for (let i = 0; i < size; i++) {
+            slots.push(i < n ? athletes[i] : null);  // нечётный последний — бай (null)
         }
+        return slots;  // массив длины size, null = бай (ожидает победителя)
+    },
 
-        const size = 1 << Math.ceil(Math.log2(n));       // ближайшая сверху степень двойки
-        const order = seedOrder(size);             // полный порядок сидений (длина = size)
-        // Номер сидения > n — свободный слот (бай), ставим null
-        const slots = order.map(seed => seed <= n ? athletes[seed - 1] : null);
-        return slots;  // массив длины size, null = бай
+    // Авторасстановка дней бойцов по позиции в олимпийской сетке.
+    // ordered — массив слотов из _pairAndPlaceLottery (null = бай/пустой слот),
+    // длина = ближайшая степень двойки. Каждая ПАРА 1-го раунда получает свой день
+    // последовательно (пары по порядку). День бойца = день его первого боя, распределённый
+    // равномерно по числу дней турнира: бои идут подряд, и вся последовательность
+    // делится на суммарное число дней (5 бойцов: б1-б2→Д1, б3-б4→Д2, полуфинал→Д2, финал→Д3).
+    _autoAssignDayByRound(ordered, totalDays) {
+        const totalDaysC = Math.max(1, parseInt(totalDays) || 1);
+        const n = ordered.length;
+        let realCount = 0;
+        for (let i = 0; i < n; i++) if (ordered[i] !== null) realCount++;
+        if (realCount === 0) return {};
+        // моделируем сетку последовательно, считая порядковые номера боёв
+        // alive — слоты реальных бойцов (не бай)
+        const alive = [];
+        for (let i = 0; i < n; i++) if (ordered[i] !== null) alive.push(i);
+        const firstFight = {};   // слот -> порядковый номер первого боя (1-based)
+        let fightNum = 0;
+        let cur = alive.slice();
+        while (cur.length > 0) {
+            const next = [];
+            let i = 0;
+            for (; i + 1 < cur.length; i += 2) {
+                fightNum++;                     // этот бой получает следующий номер
+                if (!(cur[i] in firstFight)) firstFight[cur[i]] = fightNum;
+                if (!(cur[i+1] in firstFight)) firstFight[cur[i+1]] = fightNum;
+                next.push(cur[i]);              // победитель идёт дальше
+            }
+            if (i < cur.length) {
+                const lastIdx = cur[i];         // нечётный хвост — бай: вступает в след. раунде
+                if (!(lastIdx in firstFight)) firstFight[lastIdx] = fightNum + 1;
+                next.push(lastIdx);
+            }
+            cur = next;
+            if (cur.length <= 1) break;
+        }
+        // сколько всего боёв (для равномерного распределения по дням)
+        const totalFights = fightNum;
+        const dayForFight = (fn) => {
+            if (fn <= 0) return 1;
+            // боёв не больше дней — каждому свой день
+            if (totalDaysC >= totalFights) return fn;
+            // Равномерно, со сдвигом нагрузки к середине: бой fn → день round(fn * days / fights),
+            // чтобы пары 1-го раунда НЕ сваливались все в первый день.
+            // Пример (5 бойцов / 3 дня): fn1->Д1, fn2->Д2, fn3->Д2, fn4->Д3  =>  1-2-1.
+            return Math.min(totalDaysC, Math.max(1, Math.round(fn * totalDaysC / totalFights)));
+        };
+        const result = {};
+        for (const slotIdx in firstFight) {
+            const s = parseInt(slotIdx);
+            result[s + 1] = dayForFight(firstFight[s]);
+        }
+        return result;
     },
 
     async performLottery(tournamentId, preserve = true) {
@@ -2356,20 +2402,26 @@ setupExport() {
 
         // Умный подбор соперников по весу и возрасту (олимпийская система)
         const lotteryResults = {};
+        // Число дней турнира (для авторасстановки дней)
+        const daysFromDates = (tournament.date_from && tournament.date_to)
+            ? Math.floor((new Date(tournament.date_to) - new Date(tournament.date_from)) / 86400000) + 1 : 1;
+        const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.days) || 1));
         // Сортируем группы по весу — от лёгких к тяжёлым
         const wgEntries = Object.entries(weightGroups)
             .map(([wc, grp]) => [wc, grp, parseFloat((String(wc).match(/(\d+(?:\.\d+)?)/) || [])[1]) || 0])
             .sort((a, b) => a[2] - b[2]);
         wgEntries.forEach(([weightClass, group]) => {
             const ordered = this._pairAndPlaceLottery(group); // массив слотов, null = бай
+            // Авторасстановка дней: раунд первого появления бойца в сетке → день
+            const slotDays = this._autoAssignDayByRound(ordered, tournamentDays);
             let slot = 1;
             ordered.forEach(ath => {
                 if (ath === null) return; // бай — в жеребьёвку не попадает
                 lotteryResults[weightClass] = lotteryResults[weightClass] || [];
                 lotteryResults[weightClass].push({
                     athlete_id: ath.id,
-                    slot: slot++,
-                    day: 1,
+                    slot: slot,
+                    day: slotDays[slot] || 1,
                     name: ath.name,
                     weight: ath.weight,
                     gender: ath.gender,
@@ -2377,6 +2429,7 @@ setupExport() {
                     region: ath.region,
                     coach: ath.coach
                 });
+                slot++;
             });
         });
 
@@ -2423,6 +2476,7 @@ setupExport() {
                     <thead>
                         <tr>
                             <th>Слот</th>
+                            <th>ID</th>
                             <th>День</th>
                             <th>Ф.И.О.</th>
                             <th>Год рождения</th>
@@ -2437,10 +2491,11 @@ setupExport() {
                 html += `
                         <tr data-athlete-id="${a.athlete_id}" data-weight-class="${weightClass}">
                             <td><strong>${a.slot}</strong></td>
+                            <td><span class="lottery-ath-id">${a.athlete_id}</span></td>
                             <td>${daySelect}</td>
-                            <td>${this.escapeHtml(a.name)}</td>
+                            <td><span class="lottery-ath-name">${this.escapeHtml(a.name)}</span></td>
                             <td>${a.birth_year || ''}</td>
-                            <td>${a.weight} кг</td>
+                            <td><span class="lottery-ath-weight">${a.weight} кг</span></td>
                             <td><button class="btn-edit-fighter" onclick="App.editLotteryAthlete(${tournamentId}, this, '${this.escapeHtml(weightClass)}', ${a.slot}, ${a.athlete_id})" title="Заменить спортсмена">✏️</button></td>
                         </tr>`;
             });
@@ -2816,18 +2871,22 @@ setupExport() {
             // Если выбранный уже стоит в другом слоте — меняем их местами (без дублей)
             if (duplicateRow) {
                 const prev = athletes.find(a => a.id === currentAthleteId);
-                const nc2 = duplicateRow.querySelector('td:nth-child(3)');
-                const wc2 = duplicateRow.querySelector('td:nth-child(5)');
+                const nc2 = duplicateRow.querySelector('.lottery-ath-name');
+                const wc2 = duplicateRow.querySelector('.lottery-ath-weight');
+                const id2 = duplicateRow.querySelector('.lottery-ath-id');
                 if (nc2) { nc2.textContent = prev ? prev.name : ''; nc2.style.color = '#ffd700'; nc2.style.fontWeight = 'bold'; }
                 if (wc2) { wc2.textContent = prev ? prev.weight + ' кг' : ''; wc2.style.color = '#ffd700'; }
+                if (id2) { id2.textContent = currentAthleteId; }
                 duplicateRow.dataset.athleteId = currentAthleteId;
             }
 
             const newAthlete = athletes.find(a => a.id === newId);
-            const nc = row.querySelector('td:nth-child(3)');
-            const wc3 = row.querySelector('td:nth-child(5)');
+            const nc = row.querySelector('.lottery-ath-name');
+            const wc3 = row.querySelector('.lottery-ath-weight');
+            const id1 = row.querySelector('.lottery-ath-id');
             if (nc) { nc.textContent = newAthlete ? newAthlete.name : ''; nc.style.color = '#ffd700'; nc.style.fontWeight = 'bold'; }
             if (wc3) { wc3.textContent = (newAthlete ? newAthlete.weight : '') + ' кг'; wc3.style.color = '#ffd700'; }
+            if (id1) { id1.textContent = newId; }
             row.dataset.athleteId = newId;
         });
     },
@@ -3104,6 +3163,9 @@ setupExport() {
                 // Следующие раунды: пары победителей.
                 // pairIndex для раундов 2+ — раунд-кодированный (1000*round + idx),
                 // чтобы результат каждой пары можно было сохранить в БД.
+                // Исключение: если в жеребьёвке был НЕЧЁТНЫЙ боец (бай, продвинулся без боя),
+                // он встречает победителя ПЕРВОЙ пары в следующем раунде (полуфинал).
+                const byeSlot = (slots.length % 2 !== 0) ? slots[slots.length - 1] : null;
                 let roundNum = 1;
                 while (true) {
                     const prev = rounds[rounds.length - 1];
@@ -3122,14 +3184,50 @@ setupExport() {
                     roundNum++;
                     const offset = (roundNum - 1) * 1000;
                     const nextRound = [];
-                    for (let i = 0; i < winners.length - 1; i += 2) {
-                        const pIdx = offset + i;
-                        nextRound.push({
-                            a1: winners[i],
-                            a2: winners[i + 1],
-                            pairIndex: pIdx,
-                            result: resultsMap[`${weightClass}|${pIdx}`] || null
-                        });
+                    let winnerName;  // не используется
+                    // Если есть бай (нечётный) — он участвует в этом раунде с победителем 1-й пары.
+                    // Первую пару раунда составляем как (бай или W1, следующий-свободный).
+                    const wArr = winners.filter(w => w != null);
+                    if (byeSlot && roundNum === 2) {
+                        // Полуфинал: победитель ПЕРВОЙ пары (W12) против бая (б5).
+                        // Победитель BYE-пары (это и есть б5) уже в byeSlot — исключаем его из wArr.
+                        const byeId = fid(byeSlot);
+                        const wNoBye = wArr.filter(w => fid(w) !== byeId);
+                        const w1 = wNoBye[0];
+                        if (w1) {
+                            nextRound.push({
+                                a1: w1, a2: byeSlot, pairIndex: offset,
+                                result: resultsMap[`${weightClass}|${offset}`] || null
+                            });
+                        }
+                        // остальные победители (после w1) — парим между собой;
+                        // нечётный последний продвигается дальше (встретит победителя в финале)
+                        const rest = wNoBye.slice(1);
+                        for (let i = 0; i < rest.length - 1; i += 2) {
+                            const pIdx = offset + nextRound.length;
+                            nextRound.push({
+                                a1: rest[i], a2: rest[i + 1], pairIndex: pIdx,
+                                result: resultsMap[`${weightClass}|${pIdx}`] || null
+                            });
+                        }
+                        if (rest.length % 2 === 1) {
+                            // последний победитель без пары — продвигается дальше (бай)
+                            nextRound.push({ a1: rest[rest.length - 1], a2: null, pairIndex: null,
+                                result: { winner_id: fid(rest[rest.length - 1]), method: 'авто' } });
+                        }
+                    } else {
+                        for (let i = 0; i < wArr.length - 1; i += 2) {
+                            const pIdx = offset + i;
+                            nextRound.push({
+                                a1: wArr[i], a2: wArr[i + 1], pairIndex: pIdx,
+                                result: resultsMap[`${weightClass}|${pIdx}`] || null
+                            });
+                        }
+                        if (wArr.length % 2 !== 0) {
+                            const lastW = wArr[wArr.length - 1];
+                            nextRound.push({ a1: lastW, a2: null, pairIndex: null,
+                                result: { winner_id: fid(lastW), method: 'авто' } });
+                        }
                     }
                     if (nextRound.length === 0) break;
                     rounds.push(nextRound);
@@ -3223,94 +3321,10 @@ setupExport() {
                             ? `<div class="fight-method">${this.escapeHtml(savedMethod)}</div>` : '';
                         const byeLine = a2 === null ? '<div class="fight-method">Автоматический проход</div>' : '';
 
-                        // День боя — по дню каждого бойца отдельно (из жеребьёвки).
-                        // Если у бойцов пары ОДИНАКОВЫЙ день — обычный единый блок.
-                        // Если дни РАЗНЫЕ — каждый боец рисуется в свою вкладку дня,
-                        // а связь/кнопки победителя — в Поздний день (когда оба доступны).
-                        const ensureDayCol = (d) => {
-                            if (!daysMap[d]) daysMap[d] = { cat: {} };
-                            if (!daysMap[d].cat[weightClass]) {
-                                daysMap[d].cat[weightClass] = { slotCount: slots.length, cols: {} };
-                            }
-                            const ck = String(roundNum);
-                            if (!daysMap[d].cat[weightClass].cols[ck]) {
-                                daysMap[d].cat[weightClass].cols[ck] = `<div class="bracket-round-col" data-day="${d}">
-                                    <div class="round-label"><span class="day-tag">День ${d}</span> ${roundName}</div>`;
-                            }
-                            return { d, ck, wc: daysMap[d].cat[weightClass] };
-                        };
-
-                        if (roundNum === 1 && (dayA != null || dayB != null)) {
-                            const dA_ = dayA != null ? dayA : centerDay;
-                            const dB_ = dayB != null ? dayB : centerDay;
-                            const sameDay = (dA_ === dB_);
-                            // Поздний день — там кнопки победителя и связь пары
-                            const actionDay = Math.max(dA_, dB_);
-
-                            if (sameDay) {
-                                // Один единый блок на день (оба бойца + кнопки) — как обычная сетка
-                                const col = ensureDayCol(dA_);
-                                col.wc.cols[col.ck] += `
-                                    <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dA_}">
-                                        <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
-                                            <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
-                                            ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                            ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                        </div>
-                                        <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
-                                            <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
-                                            ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                            ${a2 !== null && roundNum === 1 && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                            ${a2 === null && roundNum === 1 ? `<button class="btn-add-opponent" onclick="App.addBracketOpponent(${tournament.id}, this, '${this.escapeHtml(weightClass)}')" title="Добавить соперника вручную">➕ соперник</button>` : ''}
-                                        </div>
-                                        ${buttonsHtml}
-                                        ${methodLine}
-                                        ${byeLine}
-                                    </div>`;
-                            } else {
-                                // Разные дни: каждый боец в свою вкладку, кнопки/связь — в поздний день
-                                const colA = ensureDayCol(dA_);
-                                // a1 в свою вкладку
-                                colA.wc.cols[colA.ck] += `
-                                    <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dA_}">
-                                        <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
-                                            <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
-                                            ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                            ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                        </div>
-                                        ${dA_ === actionDay && a2 !== null ? `${buttonsHtml}` : ''}
-                                        ${dA_ === actionDay ? `${methodLine}${byeLine}` : ''}
-                                    </div>`;
-                                // a2 в свою вкладку (если есть)
-                                if (a2 !== null) {
-                                    const colB = ensureDayCol(dB_);
-                                    colB.wc.cols[colB.ck] += `
-                                    <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${dB_}">
-                                        <div class="fighter-row ${a2Class}" data-slot="${a2.slot != null ? a2.slot : ''}">
-                                            <span class="fighter-name">${this.escapeHtml(a2.name)}${a2.weight ? ` (${a2.weight} кг)` : ''}</span>
-                                            ${savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
-                                            ${roundNum === 1 && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
-                                        </div>
-                                        ${dB_ === actionDay ? `${buttonsHtml}${methodLine}${byeLine}` : ''}
-                                    </div>`;
-                                } else {
-                                    // a2 нет (BYE) — кнопка добавить соперника в слот a1
-                                    colA.wc.cols[colA.ck] = colA.wc.cols[colA.ck].replace(
-                                        /(<\/div>\s*<\/div>)$/,
-                                        `<button class="btn-add-opponent" onclick="App.addBracketOpponent(${tournament.id}, this, '${this.escapeHtml(weightClass)}')" title="Добавить соперника вручную">➕ соперник</button>$1`
-                                    );
-                                }
-                            }
-                            // Ячейка победителя в финале — в день боя (поздний)
-                            if (roundNum === maxRounds && savedWinner != null && a2 !== null) {
-                                const wname = (savedWinner === a1.athlete_id) ? a1.name : a2.name;
-                                const acol = ensureDayCol(actionDay);
-                                acol.wc.cols[acol.ck] += `<div class="fight-result-cell">Победитель: ${this.escapeHtml(wname)}</div>`;
-                            }
-                            return;
-                        }
-
-                        // Единый блок пары рисуем в день боя (centerDay) для раундов 2+ и BYE
+                        // Олимпийская система: пара бойцов рисуется ЕДИНЫМ блоком в день боя.
+                        // День боя = ПОЗДНИЙ (максимальный) из дней бойцов пары — боец,
+                        // перенесённый на более поздний день, «тянет» за собой напарника
+                        // (это корректно для олимпийской расстановки по слотам).
                         if (!daysMap[centerDay]) daysMap[centerDay] = { cat: {} };
                         if (!daysMap[centerDay].cat[weightClass]) {
                             daysMap[centerDay].cat[weightClass] = { slotCount: slots.length, cols: {} };
