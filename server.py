@@ -198,7 +198,8 @@ UPDATE_ALLOWED = {
     'app.js', 'index.html', 'style.css', 'login.html',
     'server.py', 'database.py', 'app.py', 'requirements.txt',
     'update-manifest.json', 'ogl_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx',
-    'reglament_tmp.docx'
+    'reglament_tmp.docx', 'boxingapp.exe',
+    'updater.bat', 'restart.bat'
 }
 
 
@@ -1440,6 +1441,51 @@ def update_apply():
         if name in ('boxing.db',) or name == LOCAL_VERSION_FILE:
             skipped.append(name)
             continue
+
+        # Обновление самого исполняемого файла (exe) — отдельный путь:
+        # Windows не даёт перезаписать работающий .exe, поэтому новый exe
+        # сохраняем во временную папку и подготавливаем скрипт-обновлятель,
+        # который заменит файл после завершения работы приложения и перезапустит его.
+        if name == 'boxingapp.exe':
+            need_restart = False
+            try:
+                content = _fetch_url(f'{base}/{rel}', timeout=60)
+                exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False) else str(app_dir)
+                tmp_dir = os.path.join(exe_dir, '__exe_update__')
+                os.makedirs(tmp_dir, exist_ok=True)
+                new_exe = os.path.join(tmp_dir, 'boxingapp_new.exe')
+                with open(new_exe, 'wb') as f:
+                    f.write(content)
+                # bat-скрипт: ждём завершения основного процесса, заменяем exe и перезапускаем
+                upd_script = os.path.join(tmp_dir, 'apply_update.bat')
+                launcher = name if getattr(sys, 'frozen', False) else 'python gui.py'
+                bat = (
+                    '@echo off\r\n'
+                    'rem Автообновление BoxingApp — не закрывайте это окно.\r\n'
+                    'set "PROC=%s"\r\n'
+                    'set "TMPD=%s"\r\n'
+                    'set "EXEDIR=%s"\r\n'
+                    'timeout /t 2 /nobreak >nul\r\n'
+                    'taskkill /im "%%PROC%%" /f >nul 2>&1\r\n'
+                    'timeout /t 2 /nobreak >nul\r\n'
+                    'copy /y "%%TMPD%%\\boxingapp_new.exe" "%%EXEDIR%%\\%%PROC%%" >nul\r\n'
+                    'rmdir /s /q "%%TMPD%%"\r\n'
+                    'start "" "%%EXEDIR%%\\%%PROC%%"\r\n'
+                    'exit\r\n'
+                ) % (launcher, tmp_dir, exe_dir)
+                with open(upd_script, 'w', encoding='utf-8', errors='replace') as f:
+                    f.write(bat)
+                updated.append(name)
+                need_restart = True
+            except Exception as e:
+                return jsonify({'error': f'Не удалось подготовить обновление exe: {e}'}), 500
+            # Перерыв после цикла: запуск скрипта-обновлятеля + сообщение о перезапуске
+            _pending_exe = os.path.join(tmp_dir, 'apply_update.bat')
+            return jsonify({
+                'ok': True, 'version': version, 'updated': updated, 'skipped': skipped,
+                'need_restart': True, 'restart_script': _pending_exe
+            })
+
         try:
             content = _fetch_url(f'{base}/{rel}', timeout=30)
         except Exception as e:
@@ -1459,6 +1505,37 @@ def update_apply():
         'updated': updated,
         'skipped': skipped
     })
+
+
+@app.route('/api/update/launch-updater', methods=['POST'])
+def update_launch_updater():
+    """Запускает скрипт-обновлятель (apply_update.bat) в отдельном процессе.
+
+    Скрипт ждёт завершения основного процесса, перезаписывает boxingapp.exe
+    новым файлом из временной папки и перезапускает приложение.
+    """
+    if not (UPDATE_OWNER and UPDATE_REPO):
+        return jsonify({'error': 'Обновления не настроены.'}), 400
+    try:
+        data = request.get_json(silent=True) or {}
+        script = data.get('script') or ''
+        # Безопасность: разрешаем только путь внутри папки __exe_update__ рядом с exe/app_dir
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False) else str(Path(ASSETS_DIR))
+        allowed_root = os.path.join(exe_dir, '__exe_update__')
+        abs_script = os.path.abspath(script)
+        if not abs_script.lower().startswith(allowed_root.lower()) or not os.path.exists(abs_script):
+            return jsonify({'error': 'Недопустимый путь скрипта обновления.'}), 400
+        # Запускаем через cmd /c старт так, чтобы процесс жил после завершения сервера
+        import subprocess
+        subprocess.Popen(
+            ['cmd', '/c', 'start', '', abs_script],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+            cwd=exe_dir
+        )
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': f'Не удалось запустить обновлятель: {e}'}), 500
 
 
 
@@ -2746,6 +2823,47 @@ def report_sostav_par(tournament_id):
     d2 = _fmt_date(t.get('date_to') or t.get('date_from') or '')
     dates = f'{d1} — {d2}' if d2 and d2 != d1 else d1
 
+    # --- Системная дата/время формирования документа ---
+    import datetime as _dt
+    _now = _dt.datetime.now()
+    form_date = _now.strftime('%d.%m.%Y')
+    form_time = _now.strftime('%H:%M')
+
+    # Даты проведения прописью: "28 октября – 31 октября 2026"
+    _rmonths = ['января','февраля','марта','апреля','мая','июня',
+                'июля','августа','сентября','октября','ноября','декабря']
+    def _date_words(s):
+        try:
+            yy, mm, dd = (int(x) for x in (s or '').split('-'))
+            return f"{dd} {_rmonths[mm-1]} {yy}"
+        except Exception:
+            return s or ''
+    _d1w = _date_words(t.get('date_from') or '')
+    _d2w = _date_words(t.get('date_to') or t.get('date_from') or '')
+    date_label = f"{_d1w} — {_d2w}" if _d2w and _d2w != _d1w else _d1w
+
+    # Определяем «день турнира», соответствующий СЕГОДНЯШНЕЙ системной дате.
+    # День N бойца (lottery.day) → календарная дата = date_from + (N-1) дней.
+    _today = _dt.date.today()
+    _target_day = None
+    try:
+        _df = _dt.datetime.strptime((t.get('date_from') or ''), '%Y-%m-%d').date()
+        _dt_ = None
+        if (t.get('date_to') or ''):
+            try: _dt_ = _dt.datetime.strptime(t.get('date_to'), '%Y-%m-%d').date()
+            except Exception: _dt_ = None
+        # фильтруем только если сегодня в диапазоне дат турнира [date_from, date_to]
+        if _df <= _today and (_dt_ is None or _today <= _dt_):
+            _off = (_today - _df).days + 1
+            if 1 <= _off <= 31:
+                _target_day = _off
+    except Exception:
+        _target_day = None
+    # день бойца (из жеребьёвки) по его athlete_id
+    _lot_day = {}
+    for _s in lottery:
+        _lot_day[_s['athlete_id']] = int(_s.get('day') or 1)
+
     # --- Собираем раунды по категориям (пары) ---
     groups = _dd(list); order = []
     for s in lottery:
@@ -2783,9 +2901,20 @@ def report_sostav_par(tournament_id):
                 # пропускаем пары без двух реальных бойцов (BYE — одиночные слоты не идут в состав)
                 if a1 is None or a2 is None:
                     continue
-                plist.append((wc, gender, ys, rno, a1, a2, win))
+                # день пары = максимальный день из дней соперников (боец не может выступать раньше своего дня)
+                _pday = max(_lot_day.get(a1, 1), _lot_day.get(a2, 1))
+                plist.append((wc, gender, ys, rno, a1, a2, win, _pday))
             rno += 1
         pairs_by_wc[wc] = plist
+
+    # Если определён «текущий» день турнира (сегодня в диапазоне дат) — оставляем только пары этого дня
+    if _target_day is not None:
+        _filtered = OrderedDict()
+        for _wc, _plist in pairs_by_wc.items():
+            _fp = [pp for pp in _plist if pp[7] == _target_day]
+            if _fp:
+                _filtered[_wc] = _fp
+        pairs_by_wc = _filtered
 
     # Группировка по полу (Юноши/Девушки) и годам
     def gender_word(g):
@@ -2839,9 +2968,19 @@ def report_sostav_par(tournament_id):
                     '{TOURNZMENTNAME}': t.get('name') or '',
                     '{TOURNZMENTDATE}': dates,
                     '{FIGTHINGYEARS}': _years_label,
+                    '{TOURNAMENT_NAME}': t.get('name') or '',
+                    '{DATE1-DATE2_YEAR}': date_label,
                 })
             except Exception:
                 pass
+
+    # --- Заполняем дату/время формирования в теле документа ---
+    _replace_in_part(doc.element.body, {
+        '{ДД.ММ.ГГГГ}': form_date,
+        '{время}': form_time,
+        '{TOURNAMENT_NAME}': t.get('name') or '',
+        '{DATE1-DATE2_YEAR}': date_label,
+    })
 
     # --- Строим таблицу ---
     t0 = doc.tables[0]
@@ -2892,22 +3031,87 @@ def report_sostav_par(tournament_id):
 
     # Собираем группы (пол, годы) -> [wcs], сортируем
     from collections import OrderedDict
+
+    # Возрастные блоки — из названия турнира: ищем пары годов «2016-2015» и т.п.,
+    # нормализуем каждую пару как (min, max) и сортируем по младшему году.
+    def gender_word(g):
+        return 'Юноши' if g == 'мужской' else ('Девушки' if g == 'женский' else '')
+
+    _age_ranges = []
+    for _a, _b in _re.findall(r'(\d{4})\s*[-–—]\s*(\d{4})', t.get('name') or ''):
+        _lo, _hi = min(int(_a), int(_b)), max(int(_a), int(_b))
+        if _lo != _hi and (_lo, _hi) not in _age_ranges:
+            _age_ranges.append((_lo, _hi))
+    _age_ranges.sort(key=lambda r: r[0])
+
+    # Если в названии блоки не извлеклись — строим по фактическим годам участников (по 2 года от min)
+    if not _age_ranges and _year_all:
+        _gmin = min(_year_all)
+        _gmax = max(_year_all)
+        _y0 = _gmin if (_gmin % 2) == 0 else _gmin
+        _y0 = _gmin
+        _r = _gmin - (_gmin % 2)
+        while _r <= _gmax + 1:
+            _age_ranges.append((_r, _r + 1))
+            _r += 2
+
+    def _block_for_year(y):
+        # найти блок, в который входит год y (по приоритету ближайший/наименьшая граница)
+        if not y:
+            return None, None
+        for (_lo, _hi) in _age_ranges:
+            if _lo <= y <= _hi:
+                return _lo, _hi
+        # не вошёл никуда — ближайший по разнице к младшей границе
+        best = None; bestd = 10**9
+        for (_lo, _hi) in _age_ranges:
+            d = abs(y - _lo)
+            if d < bestd:
+                bestd = d; best = (_lo, _hi)
+        return best
+
+    # Перестраиваем: каждая ПАРА относится к возрастному блоку по году рождения участника.
+    # Группа = (пол, блок_лет). Внутри — весовые категории (от меньшего веса к большему).
     group_map = OrderedDict()
+    pair_to_block = {}   # (wc, rno, a1, a2) -> (lo, hi) для согласованной сортировки
     for wc, plist in pairs_by_wc.items():
-        if not plist: continue
-        gender = plist[0][1]
-        ys = plist[0][2]
-        gkey = (gender_word(gender), year_label(set(ys)))
-        group_map.setdefault(gkey, []).append(wc)
-    # сортировка групп: Юноши сначала, затем Девушки; внутри — по весу
+        for pp in plist:
+            _g = pp[1]
+            _ys = [by_id.get(pp[4], {}).get('birth_year'), by_id.get(pp[5], {}).get('birth_year')]
+            _yint = None
+            for _yv in _ys:
+                try:
+                    if _yv: _yint = int(_yv); break
+                except Exception:
+                    continue
+            _blk = _block_for_year(_yint) if _yint is not None else None
+            if _blk is None:
+                continue
+            _gl = gender_word(_g)
+            _gkey = (_gl, _blk)
+            group_map.setdefault(_gkey, []).append(wc)
+    # убираем дубли категорий и сортируем группы: Юноши/Девушки, возрастные блоки по младшему году
+    for _gk in group_map:
+        group_map[_gk] = list(dict.fromkeys(group_map[_gk]))
+    def _min_year(yl):
+        return yl[0] if isinstance(yl, tuple) else 9999
     def gsort(item):
-        (gw, yl), wcs = item
+        (gw, blk), wcs = item
         rank = 0 if gw == 'Юноши' else (1 if gw == 'Девушки' else 2)
-        return (rank, yl)
+        return (rank, _min_year(blk))
     group_sorted = sorted(group_map.items(), key=gsort)
+    # внутри каждой возрастной группы веса идут от малого к большему (численно)
+    for _gi, ((_gw, _blk), _wcs) in enumerate(group_sorted):
+        group_sorted[_gi] = ((_gw, _blk), sorted(_wcs, key=lambda w: float(
+            (_re.search(r'(\d+(?:\.\d+)?)', w or '') or _re.search(r'0', '0')).group(1) or 0)))
+
+    # для подзаголовка
+    def block_label(blk):
+        return f'{blk[0]}-{blk[1]}' if blk else ''
 
     seq = 0
-    for (gword, ylabel), wcs in group_sorted:
+    for (gword, ylabel_in), wcs in group_sorted:
+        ylabel = block_label(ylabel_in)
         # подзаголовок
         if proto_sub is not None:
             sub = _copy.deepcopy(proto_sub)
@@ -2918,8 +3122,12 @@ def report_sostav_par(tournament_id):
                     runs = p.findall(_qn('w:r'))
                     if not runs: continue
                     full = ''.join(rt.text or '' for r in runs for rt in r.findall(_qn('w:t')))
-                    if '{' in full or 'Юноши' in full or 'Девуш' in full:
-                        full = (gword + ' ' + ylabel)
+                    if 'YO1-YO2' in full or '{' in full or 'Юноши' in full or 'Девуш' in full:
+                        # заменяем только маркер {YO1-YO2}, сохраняя текст ячейки ("Юноши ... гг.р.")
+                        full = full.replace('{YO1-YO2}', ylabel)
+                        if full.strip() == ylabel:
+                            # ячейка без маркера/пола — вставляем "Юноши {годы}"
+                            full = gword + ' ' + ylabel
                         ts = runs[0].findall(_qn('w:t'))
                         if ts:
                             ts[0].text = full
@@ -2929,7 +3137,7 @@ def report_sostav_par(tournament_id):
             t0._tbl.append(sub)
         # пары
         for wc in wcs:
-            for (_, gender, ys, rno, a1, a2, win) in pairs_by_wc[wc]:
+            for (_, gender, ys, rno, a1, a2, win, _pday) in pairs_by_wc[wc]:
                 seq += 1
                 # вес категории
                 mm = _re.search(r'([\d.,+-]+)', wc or '')

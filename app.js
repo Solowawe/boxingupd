@@ -241,11 +241,65 @@ const App = {
                 toast('Обновлений нет. Текущая версия: ' + (res.local_version || '—'), 'success');
                 return;
             }
-            if (!confirm(`Доступна новая версия ${res.latest_version} (текущая: ${res.local_version || '—'}). Файлы: ${(res.files || []).join(', ')}. Обновить?`)) return;
+            // Нет необходимости — файлы обновлений либо экзешник отдельно
+            this._pendingUpdate = res;
+            this.openUpdateModal();
+        } catch (e) {
+            if (statusEl) statusEl.textContent = 'Ошибка: ' + e.message;
+            toast('Ошибка: ' + e.message, 'error');
+        }
+    },
+
+    openUpdateModal() {
+        const m = document.getElementById('update-modal');
+        if (!m) return;
+        const res = this._pendingUpdate || {};
+        const files = (res.files || []).filter(f => f !== 'boxingapp.exe');
+        const hasExe = (res.files || []).includes('boxingapp.exe');
+        let body = `Доступна новая версия <b>${res.latest_version}</b>`;
+        if (res.local_version) body += ` (текущая: ${res.local_version})`;
+        body += '.<br><br>';
+        if (files.length) body += 'Обновляемые файлы: <b>' + files.join(', ') + '</b>.<br><br>';
+        const btn = document.getElementById('update-modal-confirm');
+        if (hasExe) {
+            body += 'Обновление затрагивает исполняемый файл приложения (boxingapp.exe).<br>' +
+                    'Для продолжения приложение будет <b>закрыто и перезапущено</b>. Продолжить?';
+            btn.textContent = 'Да, перезапустить и обновить';
+        } else {
+            body += 'Обновить?';
+            btn.textContent = 'Да, обновить';
+        }
+        document.getElementById('update-modal-body').innerHTML = body;
+        m.style.display = 'block';
+        // вешаем обработчик один раз
+        const confirmBtn = document.getElementById('update-modal-confirm');
+        confirmBtn.onclick = () => this.applyPendingUpdate();
+    },
+
+    closeUpdateModal() {
+        const m = document.getElementById('update-modal');
+        if (m) m.style.display = 'none';
+    },
+
+    async applyPendingUpdate() {
+        const statusEl = document.getElementById('update-status');
+        this.closeUpdateModal();
+        try {
             const r = await fetch('/api/update/apply', { method: 'POST' }).then(x => x.json());
             if (r.ok) {
-                if (statusEl) statusEl.textContent = `Обновлено до ${r.version}`;
-                toast('✅ Приложение успешно обновлено. Обновите страницу (F5). Если обновлялся backend — перезапустите сервер.', 'success', 6000);
+                if (r.need_restart && r.restart_script) {
+                    // Запускаем обновлятель в отдельном процессе (cmd), который перезапишет exe и перезапустит приложение.
+                    await fetch('/api/update/launch-updater', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ script: r.restart_script })
+                    }).catch(() => {});
+                    if (statusEl) statusEl.textContent = 'Проверка обновлений...';
+                    toast('Приложение закрывается и перезапускается для завершения обновления...', 'warning', 8000);
+                } else {
+                    if (statusEl) statusEl.textContent = `Обновлено до ${r.version}`;
+                    toast('✅ Приложение успешно обновлено. Обновите страницу (F5). Если обновлялся backend — перезапустите сервер.', 'success', 6000);
+                }
             } else {
                 if (statusEl) statusEl.textContent = 'Ошибка: ' + r.error;
                 toast('Ошибка обновления: ' + r.error, 'error');

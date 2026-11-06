@@ -265,6 +265,19 @@
         </div>
     </div>
 
+    <!-- Модальное окно подтверждения обновления приложения -->
+    <div id="update-modal" class="modal">
+        <div class="modal-content" style="max-width:480px;">
+            <span class="close" onclick="App.closeUpdateModal()">&times;</span>
+            <h2>Обновление приложения</h2>
+            <div id="update-modal-body" style="line-height:1.5; color:#d0d0d0; font-size:0.95em; margin:8px 0 16px;"></div>
+            <div class="form-row" style="justify-content:flex-end; gap:10px;">
+                <button type="button" class="btn-secondary" onclick="App.closeUpdateModal()">Нет</button>
+                <button type="button" id="update-modal-confirm" class="btn-primary">Да, обновить и перезапустить</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="app.js?v=20261015d"></script>
 </body>
