@@ -3323,7 +3323,7 @@ setupExport() {
 
                 rounds.forEach((roundFights, roundIdx) => {
                     const roundNum = roundIdx + 1;
-                    const roundName = this.getRoundName(roundNum, maxRounds);
+                    const roundName = this.getRoundName(roundNum, maxRounds, slots.length);
                     // Каждый БОЙ получает свой день:
                     //  - 1-й раунд — из жеребьёвки (день слота), ограниченный числом дней
                     //  - последующие раунды — по номеру раунда (когда сыграны предыдущие)
@@ -3656,18 +3656,28 @@ setupExport() {
         return a ? a.name : `#${athleteId}`;
     },
 
-    getRoundName(round, maxRounds) {
-        const names = {
-            1: '1/8 финала',
-            2: '1/4 финала',
-            3: '1/2 финала',
-            4: 'Финал',
-        };
-        if (names[round]) return names[round];
+    getRoundName(round, maxRounds, n) {
         // Последний раунд — всегда Финал
         if (round === maxRounds) return 'Финал';
-        // Предпоследний — Победитель (если это не финал)
-        if (round === maxRounds - 1) return 'Победитель';
+        // Число бойцов определяет имя начального раунда:
+        //  - 3 бойца → сразу «1/4 финала» (следующий бой — уже финал)
+        //  - больше 3 → начиная с «1/8 финала» и далее по возрастанию к финалу
+        const preFinal = Math.max(1, (maxRounds || 1) - 1);
+        const N = (n == null) ? 0 : Number(n);
+        let seq;
+        if (N <= 3) {
+            // первый раунд «1/4»; если раундов больше, перед финалом идут «1/2»
+            seq = preFinal === 1 ? ['1/4 финала'] : ['1/4 финала', '1/2 финала'];
+        } else if (preFinal === 1) {
+            seq = ['1/8 финала'];
+        } else if (preFinal === 2) {
+            seq = ['1/8 финала', '1/4 финала'];
+        } else if (preFinal === 3) {
+            seq = ['1/8 финала', '1/4 финала', '1/2 финала'];
+        } else {
+            seq = ['1/8 финала', '1/4 финала', '1/2 финала', 'Финал'];
+        }
+        if (round >= 1 && round <= seq.length) return seq[round - 1];
         return `${round} раунд`;
     },
 
