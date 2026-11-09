@@ -2548,17 +2548,41 @@ setupExport() {
             </div>
         `;
 
-        // Количество дней из разницы дат турнира (для выбора дня в каждом слоте)
+        // Количество дней из разницы дат турнира (просто отображаем как надпись)
         let daysCount = 1;
         if (tournament.date_from && tournament.date_to) {
             const diff = (new Date(tournament.date_to) - new Date(tournament.date_from)) / 86400000;
             if (isFinite(diff) && diff >= 0) daysCount = Math.floor(diff) + 1;
         }
-        const dayOptions = Array.from({ length: daysCount }, (_, i) => i + 1)
-            .map(d => `<option value="${d}">День ${d}</option>`).join('');
 
+        // Сохраняем данные для подменю пола, чтобы перерисовывать список по выбранной группе
+        this._ltTournament = tournament;
+        this._ltLottery = lotteryResults;
+        this._ltDays = daysCount;
+
+        // Панель переключателя пола
+        const genderBar = `
+            <div class="lottery-gender-bar" style="margin:14px 0; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+                <button class="btn-secondary lottery-gender-tab ${!this._lotteryGender ? 'active' : ''}" data-gender="all" onclick="App.setLotteryGender('')">Все</button>
+                <button class="btn-secondary lottery-gender-tab ${this._lotteryGender === 'мужской' ? 'active' : ''}" data-gender="мужской" onclick="App.setLotteryGender('мужской')">Юноши</button>
+                <button class="btn-secondary lottery-gender-tab ${this._lotteryGender === 'женский' ? 'active' : ''}" data-gender="женский" onclick="App.setLotteryGender('женский')">Девушки</button>
+            </div>
+        `;
+
+        results.innerHTML = genderBar;
+        this.setLotteryGender(this._lotteryGender || '');
+    },
+
+    /* Строит HTML-список жеребьёвки с учётом фильтра по полу.
+       День бойца выводится простой надписью (без выпадающего меню). */
+    _lotteryHtml(tournament, lotteryResults, daysCount, genderFilter) {
+        const tournamentId = tournament.id;
         let html = '';
         Object.entries(lotteryResults).forEach(([weightClass, athletes]) => {
+            // Определяем пол категории по первому слову названия («мужской …» / «женский …»)
+            const wcGender = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s/);
+            const catGender = wcGender ? wcGender[1].toLowerCase() : '';
+            if (genderFilter && catGender !== genderFilter) return;
             html += `<div class="lottery-category">
                 <h3 class="weight-title">${this.escapeHtml(weightClass)}</h3>
                 <table class="lottery-table">
@@ -2576,12 +2600,13 @@ setupExport() {
                     <tbody>`;
             athletes.forEach(a => {
                 const curDay = (a.day != null) ? parseInt(a.day) : 1;
-                const daySelect = `<select class="lottery-day-select" data-slot="${a.slot}">${this._dayOptions(dayOptions, curDay)}</select>`;
+                // День — простая надпись, без выпадающего меню
+                const dayText = `<span class="lottery-day-text">День ${curDay}</span>`;
                 html += `
                         <tr data-athlete-id="${a.athlete_id}" data-weight-class="${weightClass}">
                             <td><strong>${a.slot}</strong></td>
                             <td><span class="lottery-ath-id">${a.athlete_id}</span></td>
-                            <td>${daySelect}</td>
+                            <td>${dayText}</td>
                             <td><span class="lottery-ath-name">${this.escapeHtml(a.name)}</span></td>
                             <td>${a.birth_year || ''}</td>
                             <td><span class="lottery-ath-weight">${a.weight} кг</span></td>
@@ -2594,19 +2619,24 @@ setupExport() {
             </div>`;
         });
 
-        // Кнопка сохранения жеребьёвки (после ручной правки соперников/дней)
+        // Кнопка сохранения жеребьёвки (после ручной правки соперников)
         html += '<div style="text-align:center; margin-top:20px;">';
         html += '<button class="btn-primary" onclick="App.saveLotteryFromUI()" style="font-size:1.1em; padding:12px 30px;">💾 Сохранить жеребьевку</button>';
         html += '</div>';
+        return html;
+    },
 
-        results.innerHTML = html;
-
-        // Автосохранение жеребьёвки при смене дня у слота
-        results.querySelectorAll('.lottery-day-select').forEach(sel => {
-            sel.addEventListener('change', async () => {
-                await this.saveLotteryFromUI();
+    // Установить фильтр пола для списка жеребьёвки ('' = все, 'мужской', 'женский')
+    setLotteryGender(g) {
+        this._lotteryGender = g;
+        const results = document.getElementById('lottery-results');
+        if (results && this._ltTournament && this._ltLottery) {
+            const daysCount = this._ltDays || 1;
+            results.innerHTML = this._lotteryHtml(this._ltTournament, this._ltLottery, daysCount, g);
+            results.querySelectorAll('.lottery-gender-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.gender === (g || 'all'));
             });
-        });
+        }
     },
 
     // Возвращает options с выбранным нужным днём
@@ -2993,8 +3023,8 @@ setupExport() {
             const wc = row.dataset.weightClass;
             const athleteId = parseInt(row.dataset.athleteId);
             const slot = parseInt(row.querySelector('td strong').textContent);
-            const daySelect = row.querySelector('.lottery-day-select');
-            const day = daySelect ? parseInt(daySelect.value) || 1 : 1;
+            const daySelect = row.querySelector('.lottery-day-text');
+            const day = daySelect ? parseInt((daySelect.textContent || '').replace(/\D+/g, '')) || 1 : 1;
             if (athleteId) {
                 if (!lotteryData[wc]) lotteryData[wc] = [];
                 lotteryData[wc].push({ athlete_id: athleteId, slot: slot, day: day });

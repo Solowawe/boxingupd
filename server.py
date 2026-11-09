@@ -112,8 +112,23 @@ if getattr(sys, 'frozen', False):
                 pass
     # Шаблоны отчётов тоже копируем в каталог данных (для переносной версии —
     # в папку рядом с exe), чтобы их можно было редактировать/заменять.
-    # При обновлении версии (встроенная новее сохранённой) — перезаписываем шаблоны,
-    # чтобы старые/повреждённые копии не оставались после апдейта.
+    # При обновлении версии — перезаписываем шаблоны, чтобы старые/повреждённые
+    # копии не оставались после апдейта.
+
+    def _has_token(path, token):
+        """Проверяет, есть ли в .docx-файле искомый текстовый маркер (в теле/колонтитулах)."""
+        try:
+            import zipfile as _zipfile
+            with _zipfile.ZipFile(path) as _zf:
+                for _n in _zf.namelist():
+                    if _n.endswith('.xml'):
+                        _c = _zf.read(_n).decode('utf-8', 'ignore')
+                        if token in _c:
+                            return True
+            return False
+        except Exception:
+            return False
+
     for _f in ('ogl_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx', 'reglament_tmp.docx'):
         _src = os.path.join(_bundled, _f)
         _dst = os.path.join(DATA_DIR, _f)
@@ -123,9 +138,14 @@ if getattr(sys, 'frozen', False):
         if not os.path.exists(_dst):
             _need_tpl = True
         else:
-            # перезапишем, если встроенная версия новее сохранённой (для .docx по update-manifest)
             _dm = _read_json_version(os.path.join(DATA_DIR, 'update-manifest.json'))
             _need_tpl = _ver_tuple(_bm) > _ver_tuple(_dm)
+            # sp_tmp — официальные шаблоны «Состава пар». Если в сохранённой копии
+            # нет маркера {TOURNAMENT_NAME} (признак старого шаблона с зашитым текстом),
+            # принудительно обновляем её из сборки, чтобы убрать устаревшую шапку.
+            if _f in ('sp_tmp.docx', 'sp_tmp_new.docx') and not _need_tpl:
+                if not _has_token(_dst, '{TOURNAMENT_NAME}') or not _has_token(_dst, '{DATE1-DATE2_YEAR}'):
+                    _need_tpl = True
         if _need_tpl:
             try:
                 shutil.copy2(_src, _dst)
