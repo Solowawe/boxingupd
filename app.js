@@ -2484,7 +2484,8 @@ setupExport() {
             if (!a.weight) return;
             const w = Number(a.weight);
             const wStr = Number.isInteger(w) ? String(w) : String(w);
-            const key = `${a.gender} ${wStr} кг`;
+            const g = this._normGender(a.gender);
+            const key = `${g} ${wStr} кг`;
             weightGroups[key] = weightGroups[key] || [];
             weightGroups[key].push(a);
         });
@@ -2577,9 +2578,10 @@ setupExport() {
             </div>
         `;
         Object.entries(lotteryResults).forEach(([weightClass, athletes]) => {
-            // Определяем пол категории по первому слову названия («мужской …» / «женский …»)
+            // Определяем пол категории по первому слову названия («мужской …» / «женский …»),
+            // нормализуем, чтобы распознавать и «жен», «муж» и т.п.
             const wcGender = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s/);
-            const catGender = wcGender ? wcGender[1].toLowerCase() : '';
+            const catGender = wcGender ? this._normGender(wcGender[1]) : '';
             if (genderFilter && catGender !== genderFilter) return;
             html += `<div class="lottery-category">
                 <h3 class="weight-title">${this.escapeHtml(weightClass)}</h3>
@@ -2646,6 +2648,15 @@ setupExport() {
         return opts.join('');
     },
 
+    // Нормализует пол спортсмена в канонический вид: 'мужской' / 'женский'.
+    _normGender(g) {
+        const s = String(g == null ? '' : g).toLowerCase().trim();
+        if (!s) return '';
+        if (s.includes('муж') || s === 'м' || s === 'male') return 'мужской';
+        if (s.includes('жен') || s === 'ж' || s === 'f' || s === 'female') return 'женский';
+        return s;
+    },
+
     async refreshLottery(tournamentId) {
         if (!confirm('Перемешать жеребьевку? Текущие настройки будут потеряны.')) return;
         
@@ -2658,7 +2669,8 @@ setupExport() {
             if (!a.weight) return;
             const w = Number(a.weight);
             const wStr = Number.isInteger(w) ? String(w) : String(w);
-            const key = `${a.gender} ${wStr} кг`;
+            const g = this._normGender(a.gender);
+            const key = `${g} ${wStr} кг`;
             weightGroups[key] = weightGroups[key] || [];
             weightGroups[key].push(a);
         });
