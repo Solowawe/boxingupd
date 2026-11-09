@@ -2560,16 +2560,7 @@ setupExport() {
         this._ltLottery = lotteryResults;
         this._ltDays = daysCount;
 
-        // Панель переключателя пола
-        const genderBar = `
-            <div class="lottery-gender-bar" style="margin:14px 0; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
-                <button class="btn-secondary lottery-gender-tab ${!this._lotteryGender ? 'active' : ''}" data-gender="all" onclick="App.setLotteryGender('')">Все</button>
-                <button class="btn-secondary lottery-gender-tab ${this._lotteryGender === 'мужской' ? 'active' : ''}" data-gender="мужской" onclick="App.setLotteryGender('мужской')">Юноши</button>
-                <button class="btn-secondary lottery-gender-tab ${this._lotteryGender === 'женский' ? 'active' : ''}" data-gender="женский" onclick="App.setLotteryGender('женский')">Девушки</button>
-            </div>
-        `;
-
-        results.innerHTML = genderBar;
+        // Рендерим панель пола + список категорий (панель встроена в _lotteryHtml)
         this.setLotteryGender(this._lotteryGender || '');
     },
 
@@ -2577,7 +2568,14 @@ setupExport() {
        День бойца выводится простой надписью (без выпадающего меню). */
     _lotteryHtml(tournament, lotteryResults, daysCount, genderFilter) {
         const tournamentId = tournament.id;
-        let html = '';
+        // Панель переключателя пола — всегда вверху списка
+        let html = `
+            <div class="lottery-gender-bar" style="margin:14px 0; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+                <button class="btn-secondary lottery-gender-tab ${!genderFilter ? 'active' : ''}" data-gender="all" onclick="App.setLotteryGender('')">Все</button>
+                <button class="btn-secondary lottery-gender-tab ${genderFilter === 'мужской' ? 'active' : ''}" data-gender="мужской" onclick="App.setLotteryGender('мужской')">Юноши</button>
+                <button class="btn-secondary lottery-gender-tab ${genderFilter === 'женский' ? 'active' : ''}" data-gender="женский" onclick="App.setLotteryGender('женский')">Девушки</button>
+            </div>
+        `;
         Object.entries(lotteryResults).forEach(([weightClass, athletes]) => {
             // Определяем пол категории по первому слову названия («мужской …» / «женский …»)
             const wcGender = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s/);

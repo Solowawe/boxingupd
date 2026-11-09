@@ -1478,21 +1478,33 @@ def update_apply():
                     f.write(content)
                 # bat-скрипт: ждём завершения основного процесса, заменяем exe и перезапускаем
                 upd_script = os.path.join(tmp_dir, 'apply_update.bat')
-                launcher = name if getattr(sys, 'frozen', False) else 'python gui.py'
+                proc_name = name if getattr(sys, 'frozen', False) else 'python.exe'
                 bat = (
                     '@echo off\r\n'
                     'rem Автообновление BoxingApp — не закрывайте это окно.\r\n'
-                    'set "PROC=%s"\r\n'
+                    'set "PRNAME=%s"\r\n'
                     'set "TMPD=%s"\r\n'
                     'set "EXEDIR=%s"\r\n'
-                    'timeout /t 2 /nobreak >nul\r\n'
-                    'taskkill /im "%%PROC%%" /f >nul 2>&1\r\n'
-                    'timeout /t 2 /nobreak >nul\r\n'
-                    'copy /y "%%TMPD%%\\boxingapp_new.exe" "%%EXEDIR%%\\%%PROC%%" >nul\r\n'
-                    'rmdir /s /q "%%TMPD%%"\r\n'
-                    'start "" "%%EXEDIR%%\\%%PROC%%"\r\n'
+                    'rem Ждём, пока процесс приложения полностью завершится (Windows блокирует работающий .exe)\r\n'
+                    ':wait\r\n'
+                    'tasklist /fi "imagename eq %%PRNAME%%" 2>nul | find /i "%%PRNAME%%" >nul\r\n'
+                    'if errorlevel 1 goto dead\r\n'
+                    'taskkill /im "%%PRNAME%%" /f >nul 2>&1\r\n'
+                    'timeout /t 1 /nobreak >nul\r\n'
+                    'goto wait\r\n'
+                    ':dead\r\n'
+                    'rem Копируем новый exe в рабочую папку\r\n'
+                    'copy /y "%%TMPD%%\\boxingapp_new.exe" "%%EXEDIR%%\\boxingapp.exe" >nul\r\n'
+                    'if errorlevel 1 goto fail\r\n'
+                    'rmdir /s /q "%%TMPD%%" >nul 2>&1\r\n'
+                    'rem Перезапуск приложения\r\n'
+                    'cd /d "%%EXEDIR%%"\r\n'
+                    'start "" "%%EXEDIR%%\\boxingapp.exe"\r\n'
                     'exit\r\n'
-                ) % (launcher, tmp_dir, exe_dir)
+                    ':fail\r\n'
+                    'echo Ошибка: не удалось обновить исполняемый файл.\r\n'
+                    'pause\r\n'
+                ) % (proc_name, tmp_dir, exe_dir)
                 with open(upd_script, 'w', encoding='utf-8', errors='replace') as f:
                     f.write(bat)
                 updated.append(name)
