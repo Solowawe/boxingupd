@@ -320,9 +320,44 @@ const App = {
         window.open(`/api/report/${tournamentId}/preview`, '_blank');
     },
 
-    // Скачать «Состав пар» — формируется из сетки/жеребьёвки по шаблону sp_tmp.docx
-    downloadPairs(tournamentId) {
-        window.open(`/api/report/${tournamentId}/sostav-par`, '_blank');
+    // Скачать «Состав пар» — показывает окно выбора дня из интервала дней турнира.
+    // Число дней берём максимумом из поля days и фактического календарного
+    // диапазона дат (date_from..date_to), как в остальных разделах приложения.
+    downloadPairs(tournamentId, days, dateFrom, dateTo) {
+        let daysFromDates = 1;
+        if (dateFrom && dateTo) {
+            const d = Math.floor((new Date(dateTo) - new Date(dateFrom)) / 86400000) + 1;
+            if (!isNaN(d)) daysFromDates = d;
+        }
+        const nDays = Math.max(daysFromDates, Math.max(1, parseInt(days) || 1));
+        const modal = document.getElementById('pairs-day-modal');
+        if (!modal) {
+            // fallback: без модалки просто открываем все пары
+            window.open(`/api/report/${tournamentId}/sostav-par`, '_blank');
+            return;
+        }
+        document.getElementById('pairs-day-title').textContent = 'Выбор дня — состав пар';
+        const body = document.getElementById('pairs-day-body');
+        let html = '<div style="margin:8px 0 14px; color:#a0a0a0;">Выберите день соревнований:</div><div style="display:flex; flex-wrap:wrap; gap:8px;">';
+        for (let d = 1; d <= nDays; d++) {
+            html += `<button class="btn-secondary" onclick="App.openPairsDay(${tournamentId}, ${d})">День ${d}</button>`;
+        }
+        html += '</div>';
+        html += '<div style="margin-top:14px;"><button class="btn-secondary" style="width:100%;" onclick="App.openPairsDay(' +
+                tournamentId + ', 0)">Все пары</button></div>';
+        body.innerHTML = html;
+        modal.style.display = 'block';
+    },
+
+    // Открыть отчёт «Состав пар» за конкретный день (day=0 → все пары)
+    openPairsDay(tournamentId, day) {
+        const q = day > 0 ? `?day=${day}` : '';
+        window.open(`/api/report/${tournamentId}/sostav-par${q}`, '_blank');
+    },
+
+    closePairsDay() {
+        const m = document.getElementById('pairs-day-modal');
+        if (m) m.style.display = 'none';
     },
 
     closePreview() {
@@ -2146,7 +2181,7 @@ setupExport() {
                         <button class="btn-secondary" onclick="App.exportTournamentToExcel(${t.id})">📊 Excel</button>
                         <button class="btn-secondary" onclick="App.exportProtocolToExcel(${t.id})">📤 Протокол</button>
                         <button class="btn-secondary" onclick="App.downloadJudgeReport(${t.id})">📄 Отчёт гл. судьи</button>
-                        <button class="btn-secondary" onclick="App.downloadPairs(${t.id})">🤼 Состав пар</button>
+                        <button class="btn-secondary" onclick="App.downloadPairs(${t.id}, ${t.days || 1}, '${t.date_from || ''}', '${t.date_to || ''}')">🤼 Состав пар</button>
                         <button class="btn-secondary" style="color: #ff6b6b;" onclick="App.clearParticipants(${t.id})">🗑 Очистить участников</button>
                         <button class="btn-secondary" onclick="App.deleteTournament(${t.id})">❌ Удалить соревнование</button>
                     </div>

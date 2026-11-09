@@ -2898,20 +2898,34 @@ def report_sostav_par(tournament_id):
         rno = 1
         for rd in _rounds:
             for (a1, a2, win, method) in rd:
-                # пропускаем пары без двух реальных бойцов (BYE — одиночные слоты не идут в состав)
-                if a1 is None or a2 is None:
+                # Одиночный боец (BYE) попадает в состав, если в категории больше одного
+                # участника (он ждёт соперника/продвигается по сетке). Если спортсмен вообще
+                # один в категории — он автоматически победитель, ни с кем не боксирует,
+                # поэтому в «Состав пар» его НЕ вносим, чтобы не путать судейскую коллегию.
+                if len(slots) <= 1:
                     continue
+                if a1 is None and a2 is not None:
+                    a1, a2 = a2, None
                 # день пары = максимальный день из дней соперников (боец не может выступать раньше своего дня)
                 _pday = max(_lot_day.get(a1, 1), _lot_day.get(a2, 1))
                 plist.append((wc, gender, ys, rno, a1, a2, win, _pday))
             rno += 1
         pairs_by_wc[wc] = plist
 
-    # Если определён «текущий» день турнира (сегодня в диапазоне дат) — оставляем только пары этого дня
-    if _target_day is not None:
+    # День, для которого строим «Состав пар»:
+    #   1) явный параметр ?day=N — приоритет;
+    #   2) иначе «текущий» день турнира (сегодня в диапазоне дат), если он определён;
+    #   3) иначе день не задан — печатаем ВСЕ пары.
+    _req_day = None
+    try:
+        _req_day = int(request.args.get('day') or '') if request.args.get('day') else None
+    except Exception:
+        _req_day = None
+    _selected_day = _req_day if _req_day is not None else _target_day
+    if _selected_day is not None:
         _filtered = OrderedDict()
         for _wc, _plist in pairs_by_wc.items():
-            _fp = [pp for pp in _plist if pp[7] == _target_day]
+            _fp = [pp for pp in _plist if pp[7] == _selected_day]
             if _fp:
                 _filtered[_wc] = _fp
         pairs_by_wc = _filtered
@@ -2999,6 +3013,16 @@ def report_sostav_par(tournament_id):
         ps = tc.findall(_qn('w:p'))
         if not ps: return
         p = ps[0]
+        # Убираем автонумерацию списка (numPr) — иначе Word сам подставляет
+        # номера с плавающей запятой (1.1, 1.2 и т.п.) поверх вставляемого текста.
+        try:
+            _np = p.find(_qn('w:pPr'))
+            if _np is not None:
+                _num = _np.find(_qn('w:numPr'))
+                if _num is not None:
+                    _np.remove(_num)
+        except Exception:
+            pass
         runs = p.findall(_qn('w:r'))
         if runs:
             ts = runs[0].findall(_qn('w:t'))
@@ -3037,23 +3061,23 @@ def report_sostav_par(tournament_id):
     def gender_word(g):
         return 'Юноши' if g == 'мужской' else ('Девушки' if g == 'женский' else '')
 
-    _age_ranges = []
-    for _a, _b in _re.findall(r'(\d{4})\s*[-–—]\s*(\d{4})', t.get('name') or ''):
-        _lo, _hi = min(int(_a), int(_b)), max(int(_a), int(_b))
-        if _lo != _hi and (_lo, _hi) not in _age_ranges:
-            _age_ranges.append((_lo, _hi))
-    _age_ranges.sort(key=lambda r: r[0])
-
-    # Если в названии блоки не извлеклись — строим по фактическим годам участников (по 2 года от min)
-    if not _age_ranges and _year_all:
-        _gmin = min(_year_all)
-        _gmax = max(_year_all)
-        _y0 = _gmin if (_gmin % 2) == 0 else _gmin
-        _y0 = _gmin
-        _r = _gmin - (_gmin % 2)
-        while _r <= _gmax + 1:
-            _age_ranges.append((_r, _r + 1))
+    # Возрастные блоки — всегда строим по ФАКТИЧЕСКИМ годам участников жеребьёвки
+    # (по 2 года, начиная с чётного года от младшего). Название турнира НЕ используем
+    # как источник, чтобы блоки покрывали всех реальных спортсменов (например 2010-2016).
+    def _build_age_ranges(years):
+        yrs = sorted(set(years))
+        if not yrs:
+            return []
+        _lo = yrs[0] - (yrs[0] % 2)
+        _hi = max(yrs)
+        out = []
+        _r = _lo
+        while _r <= _hi:
+            out.append((_r, _r + 1))
             _r += 2
+        return out
+
+    _age_ranges = _build_age_ranges(_year_all)
 
     def _block_for_year(y):
         # найти блок, в который входит год y (по приоритету ближайший/наименьшая граница)
@@ -3123,11 +3147,14 @@ def report_sostav_par(tournament_id):
                     if not runs: continue
                     full = ''.join(rt.text or '' for r in runs for rt in r.findall(_qn('w:t')))
                     if 'YO1-YO2' in full or '{' in full or 'Юноши' in full or 'Девуш' in full:
-                        # заменяем только маркер {YO1-YO2}, сохраняя текст ячейки ("Юноши ... гг.р.")
+                        # заменяем маркер {YO1-YO2} и подставляем слово пола (Юноши/Девушки),
+                        # чтобы заголовок группы соответствовал фактическому полу участников
                         full = full.replace('{YO1-YO2}', ylabel)
-                        if full.strip() == ylabel:
+                        full = full.replace('Юноши', gword or 'Юноши')
+                        full = full.replace('Девушки', gword or 'Девушки')
+                        if full.strip() == ylabel or (gword and (full.strip() == gword)):
                             # ячейка без маркера/пола — вставляем "Юноши {годы}"
-                            full = gword + ' ' + ylabel
+                            full = (gword + ' ' + ylabel).strip()
                         ts = runs[0].findall(_qn('w:t'))
                         if ts:
                             ts[0].text = full
@@ -3138,6 +3165,11 @@ def report_sostav_par(tournament_id):
         # пары
         for wc in wcs:
             for (_, gender, ys, rno, a1, a2, win, _pday) in pairs_by_wc[wc]:
+                # BYE-боец (одиночный, без соперника) печатается ТОЛЬКО в свой день боя,
+                # т.е. когда выбран конкретный день (?day=N или активен «текущий» день).
+                # В полном списке (без фильтра по дню) одиночные бойцы не выводятся.
+                if (a2 is None) and _selected_day is None:
+                    continue
                 seq += 1
                 # вес категории
                 mm = _re.search(r'([\d.,+-]+)', wc or '')
