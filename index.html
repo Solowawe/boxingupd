@@ -76,15 +76,22 @@
             <!-- Вкладка: Участники -->
             <section id="tab-participants" class="tab-content">
                 <div class="panel">
-                    <h2>Управление участниками соревнования</h2>
-                    <div id="participant-tournament-controls" style="margin-bottom:15px;">
+                    <div class="section-toolbar">
+                        <h2>Управление участниками соревнования</h2>
+                        <div id="participant-tournament-controls" style="margin-bottom:15px;">
 <select id="participant-tournament-select" style="min-width:300px;padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
                             <option value="">-- Выберите соревнование --</option>
                         </select>
+                        </div>
+                        <form id="participant-form" autocomplete="off">
+                            <button type="button" id="add-manual-athlete-btn" class="btn-secondary" style="margin-bottom:10px;">✏️ Добавить участника вручную</button>
+                        </form>
+                        <div class="form-row" style="margin-bottom:10px;">
+                            <input type="text" id="participants-search" placeholder="🔍 Поиск по Ф.И.О., региону, тренеру..." style="flex:1;">
+                            <button type="button" id="participants-search-btn" class="btn-primary">🔍 Найти</button>
+                            <button type="button" id="participants-clear-btn" class="btn-secondary">✖ Сбросить</button>
+                        </div>
                     </div>
-                    <form id="participant-form" autocomplete="off">
-                        <button type="button" id="add-manual-athlete-btn" class="btn-secondary" style="margin-bottom:10px;">✏️ Добавить участника вручную</button>
-                    </form>
                     <div id="manual-athlete-form" style="display:none; margin-top:15px; padding:15px; background:rgba(255,215,0,0.05); border-radius:8px; border:1px solid rgba(255,215,0,0.2);">
                         <h3 style="color:#ffd700; margin-bottom:10px; font-size:1em;" id="manual-form-title">➕ Новый спортсмен</h3>
                         <form id="manual-athlete-input-form">
@@ -112,11 +119,6 @@
                         </form>
                     </div>
                     <div style="margin-top:15px;">
-                        <div class="form-row" style="margin-bottom:10px;">
-                            <input type="text" id="participants-search" placeholder="🔍 Поиск по Ф.И.О., региону, тренеру..." style="flex:1;">
-                            <button type="button" id="participants-search-btn" class="btn-primary">🔍 Найти</button>
-                            <button type="button" id="participants-clear-btn" class="btn-secondary">✖ Сбросить</button>
-                        </div>
                         <table id="participants-table">
                             <thead>
                                 <tr>
@@ -141,14 +143,16 @@
             <!-- Вкладка: Взвешивание -->
             <section id="tab-weighin" class="tab-content">
                 <div class="panel">
-                    <h2>Взвешивание спортсменов</h2>
-                    <div id="weighin-controls">
+                    <div class="section-toolbar">
+                        <h2>Взвешивание спортсменов</h2>
+                        <div id="weighin-controls">
 <select id="weighin-tournament-select">
                             <option value="">-- Выберите соревнование --</option>
                         </select>
                         <button id="generate-weighin" class="btn-primary">📋 Загрузить спортсменов</button>
                         <button id="weighin-save-reglament" class="btn-secondary">📄 Сохранить регламент</button>
                         <button id="weighin-save-word" class="btn-secondary">💾 Сохранить в Word</button>
+                    </div>
                     </div>
                     <div id="weighin-container"></div>
                     <table id="weighin-table">
@@ -172,12 +176,14 @@
             <!-- Вкладка: Жеребьевка -->
             <section id="tab-lottery" class="tab-content">
                 <div class="panel">
-                    <h2>Жеребьевка</h2>
-                    <div id="lottery-controls">
+                    <div class="section-toolbar">
+                        <h2>Жеребьевка</h2>
+                        <div id="lottery-controls">
 <select id="lottery-tournament-select">
                             <option value="">-- Выберите соревнование --</option>
                         </select>
                         <button id="generate-lottery" class="btn-primary">🎲 Провести жеребьевку</button>
+                    </div>
                     </div>
                     <div id="lottery-container"></div>
                     <div id="lottery-results"></div>
@@ -187,13 +193,15 @@
             <!-- Вкладка: Сетка -->
             <section id="tab-bracket" class="tab-content">
                 <div class="panel">
-                    <h2>Сетка соревнований</h2>
-                    <div id="bracket-controls">
-                        <select id="bracket-tournament-select">
-                            <option value="">-- Выберите соревнование --</option>
-                        </select>
-                        <button id="generate-bracket" class="btn-primary">🔄 Сформировать сетку</button>
-                        <button id="clear-bracket" class="btn-secondary" style="background:rgba(255,0,0,0.1);border-color:rgba(255,0,0,0.3);color:#ff6b6b;" title="Сбросить сетку в первоначальный вид (удалить все результаты боёв)">🔄 Сбросить сетку</button>
+                    <div class="section-toolbar">
+                        <h2>Сетка соревнований</h2>
+                        <div id="bracket-controls">
+                            <select id="bracket-tournament-select">
+                                <option value="">-- Выберите соревнование --</option>
+                            </select>
+                            <button id="generate-bracket" class="btn-primary">🔄 Сформировать сетку</button>
+                            <button id="clear-bracket" class="btn-secondary" style="background:rgba(255,0,0,0.1);border-color:rgba(255,0,0,0.3);color:#ff6b6b;" title="Сбросить сетку в первоначальный вид (удалить все результаты боёв)">🔄 Сбросить сетку</button>
+                        </div>
                     </div>
                     <div id="weight-classes-selector" style="margin-top:15px; display:none;">
                         <!-- Блок выбора категорий временно отключён (закомментирован)
@@ -209,11 +217,13 @@
             <!-- Вкладка: Результаты -->
 <section id="tab-results" class="tab-content">
                 <div class="panel">
-                    <h2>Результаты</h2>
+                    <div class="section-toolbar">
+                        <h2>Результаты</h2>
 <select id="results-tournament-select">
                             <option value="">-- Выберите соревнование --</option>
                         </select>
                         <button id="print-results-btn" class="btn-secondary" onclick="App.printResults()">🖨️ Печать результатов</button>
+                    </div>
                     <div id="results-container"></div>
                 </div>
             </section>

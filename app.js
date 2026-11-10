@@ -473,6 +473,8 @@ async openAbout() {
                     appHeaderEl.style.top = '';
                     appHeaderEl.style.zIndex = '';
                 }
+                // Позиционируем заголовочные панели разделов ниже плавающей шапки
+                this._syncSectionToolbarOffset(appHeaderEl, floatingHeader.checked);
                 saveFloatSetting();
             };
             floatingHeader.addEventListener('change', applyFloat);
@@ -504,6 +506,12 @@ async openAbout() {
                 if (e.target === previewModal) previewModal.style.display = 'none';
             });
         }
+        // Пересчитываем отступ заголовочных панелей разделов при изменении размера окна
+        window.addEventListener('resize', () => {
+            if (typeof floatingHeader !== 'undefined' && floatingHeader) {
+                this._syncSectionToolbarOffset(appHeaderEl, floatingHeader.checked);
+            }
+        });
         this.setupExcelImport();
         this.setupWordImport();
         this.setupAthletesImport();
@@ -633,6 +641,20 @@ async openAbout() {
     },
 
     // ==================== НАВИГАЦИЯ ====================
+
+    // Вычисляет высоту плавающей шапки и задаёт CSS-переменную,
+    // чтобы заголовочные панели разделов (.section-toolbar) при прокрутке
+    // закреплялись сразу под шапкой.
+    _syncSectionToolbarOffset(headerEl, floatingEnabled) {
+        const root = document.documentElement;
+        if (!root) return;
+        if (floatingEnabled && headerEl) {
+            const h = headerEl.offsetHeight || 0;
+            root.style.setProperty('--section-toolbar-top', h + 'px');
+        } else {
+            root.style.setProperty('--section-toolbar-top', '0px');
+        }
+    },
 
     setupTabs() {
         document.querySelectorAll('.nav-btn').forEach(btn => {

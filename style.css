@@ -129,6 +129,21 @@ nav {
     font-size: 1.5em;
 }
 
+/* Заголовочная панель раздела (заголовок + элементы управления):
+   закрепляется под плавающей шапкой при прокрутке списка.
+   top задаётся JS-переменной (высота плавающей шапки). */
+.section-toolbar {
+    position: sticky;
+    top: var(--section-toolbar-top, 0px);
+    z-index: 480;
+    background: rgba(22, 24, 44, 0.95);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255, 215, 0, 0.15);
+    padding: 8px 4px 12px;
+    margin: -8px -4px 4px;
+    border-radius: 8px;
+}
+
 .panel h3 {
     color: #e0e0e0;
     margin-bottom: 15px;
