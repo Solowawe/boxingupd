@@ -480,7 +480,12 @@ async openAbout() {
             (async () => {
                 try {
                     const s = await fetch('/api/settings').then(r => r.json());
-                    if (s && s.floatingHeader !== undefined) floatingHeader.checked = s.floatingHeader === '1';
+                    // По умолчанию плавающая шапка ВКЛЮЧЕНА; отключается пользователем
+                    if (s && s.floatingHeader !== undefined) {
+                        floatingHeader.checked = s.floatingHeader === '1';
+                    } else {
+                        floatingHeader.checked = true;
+                    }
                 } catch (e) { /* ignore */ }
                 applyFloat();
             })();

@@ -69,7 +69,11 @@ header {
     backdrop-filter: blur(10px);
     border-bottom: 1px solid rgba(255, 215, 0, 0.15);
     padding: 10px;
-    position: static; /* прокручивается; «sticky» включает чекбокс через JS */
+    /* Плавающая шапка по умолчанию: закрепляется вверху при прокрутке.
+       Чекбокс «Закрепить шапку» (JS) при выключении возвращает position: static. */
+    position: sticky;
+    top: 0;
+    z-index: 500;
 }
 
 header h1 {
