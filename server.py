@@ -30,6 +30,7 @@ import webbrowser
 import socket
 from datetime import datetime
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from flask import Flask, request, jsonify, send_file, send_from_directory, g, session, redirect, url_for
 from flask_cors import CORS
@@ -129,7 +130,7 @@ if getattr(sys, 'frozen', False):
         except Exception:
             return False
 
-    for _f in ('ogl_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx', 'reglament_tmp.docx'):
+    for _f in ('ogl_tmp.docx', 'grso_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx', 'reglament_tmp.docx'):
         _src = os.path.join(_bundled, _f)
         _dst = os.path.join(DATA_DIR, _f)
         if not os.path.exists(_src):
@@ -217,7 +218,7 @@ LOCAL_VERSION_FILE = 'local_version.txt'
 UPDATE_ALLOWED = {
     'app.js', 'index.html', 'style.css', 'login.html',
     'server.py', 'database.py', 'app.py', 'requirements.txt',
-    'update-manifest.json', 'ogl_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx',
+    'update-manifest.json', 'ogl_tmp.docx', 'grso_tmp.docx', 'sp_tmp.docx', 'sp_tmp_new.docx',
     'reglament_tmp.docx', 'boxingapp.exe',
     'updater.bat', 'restart.bat'
 }
@@ -1234,6 +1235,176 @@ def clear_bracket(tournament_id):
     return jsonify({'message': 'Сетка очищена'})
 
 
+def _simulate_calc_day(tournament_id, known=None):
+    """Строит схватки всех раундов по жеребьёвке и возвращает список пар с их днём.
+
+    known — dict {(weight_class, pair_index): winner_id} уже назначенных победителей.
+    Каждая пара: (weight_class, pair_index, a1_id, a2_id, day, winner_when_done).
+    День пары = max(дней двух соперников), день участника берётся из lottery.day.
+    Используется тем же алгоритмом, что и построение сетки на клиенте.
+    Возвращает pairs.
+    """
+    from collections import defaultdict
+    known = known or {}
+    conn = get_db()
+    lottery = rows_to_list(conn.execute(
+        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+    conn.close()
+
+    # Группируем по категориям, сортируем по slot
+    groups = defaultdict(list)
+    order = []
+    for s in lottery:
+        if s['weight_class'] not in groups:
+            order.append(s['weight_class'])
+        groups[s['weight_class']].append(s)
+    for wc in groups:
+        groups[wc].sort(key=lambda x: x['slot'])
+
+    day_by_ath = {}
+    for s in lottery:
+        try:
+            day_by_ath[s['athlete_id']] = int(s.get('day') or 1)
+        except Exception:
+            day_by_ath[s['athlete_id']] = 1
+
+    def _day(aid):
+        return day_by_ath.get(aid, 1)
+
+    def _known_winner(wc, p):
+        return known.get((wc, p))
+
+    pairs = []
+    for wc in order:
+        slots = groups[wc]
+        pair_idx = 0
+        first = []
+        for i in range(0, len(slots) - 1, 2):
+            a1 = _fid_act(slots[i]); a2 = _fid_act(slots[i + 1])
+            first.append({'a1': a1, 'a2': a2, 'p': pair_idx})
+            pair_idx += 1
+        if len(slots) % 2 != 0:
+            first.append({'a1': _fid_act(slots[-1]), 'a2': None, 'p': None})
+        rounds = [first]
+
+        round_num = 1
+        while True:
+            prev = rounds[-1]
+            winners = []
+            for f in prev:
+                if f['a2'] is None:
+                    winners.append(f['a1'])
+                else:
+                    wid = _known_winner(wc, f['p'])
+                    if wid is not None:
+                        winners.append(wid)
+                    else:
+                        winners.append(None)
+            # Если последний победитель не определён или осталось <=1 — раунды закончились
+            if winners[-1] is None or len(winners) <= 1:
+                break
+            round_num += 1
+            offset = (round_num - 1) * 1000
+            nxt = []
+            for i in range(0, len(winners) - 1, 2):
+                nxt.append({'a1': winners[i], 'a2': winners[i + 1], 'p': offset + i})
+            if len(winners) % 2 != 0:
+                nxt.append({'a1': winners[-1], 'a2': None, 'p': None})
+            if not nxt:
+                break
+            rounds.append(nxt)
+
+        # Собираем пары с днём
+        for rnd in rounds:
+            for f in rnd:
+                if f['a1'] is None:
+                    # участники пары ещё не определены (победитель прошлой пары неизвестен)
+                    continue
+                if f['a2'] is None:
+                    pairs.append((wc, f['p'], f['a1'], None, _day(f['a1']), True))
+                else:
+                    d = max(_day(f['a1']), _day(f['a2']))
+                    pairs.append((wc, f['p'], f['a1'], f['a2'], d, False))
+    return pairs
+
+
+@app.route('/api/tournaments/<int:tournament_id>/simulate-day/<int:day>', methods=['POST'])
+def simulate_day(tournament_id, day):
+    """Автоматически «провести» день N демо-турнира: сгенерировать схватки дня и
+    назначить победителей пары (детерминированно — побеждает боец с меньшим id)."""
+    if not data_dir_is_demo(tournament_id):
+        return jsonify({'error': 'Доступно только для демо-турнира'}), 400
+    conn = get_db()
+    # Уже сохранённые результаты (для каскада победителей из прошлых дней)
+    saved = {}
+    for r in rows_to_list(conn.execute(
+            "SELECT weight_class, pair_index, winner_id FROM bracket_results WHERE tournament_id=?",
+            (tournament_id,)).fetchall()):
+        saved[(r['weight_class'], r['pair_index'])] = r['winner_id']
+    conn.close()
+    pairs = _simulate_calc_day(tournament_id, known=saved)
+    conn = get_db()
+
+    import random
+    written = []
+    for (wc, p, a1, a2, d, auto) in pairs:
+        if p is None:
+            # Пара без слота-индекса (бай/авто-выход) не сохраняется в bracket_results
+            continue
+        if d != day:
+            continue
+        if auto:
+            # BYE — авто-победитель
+            conn.execute("""
+                INSERT INTO bracket_results (tournament_id, weight_class, pair_index, winner_id, method, day)
+                VALUES (?,?,?,?, 'авто', ?)
+                ON CONFLICT(tournament_id, weight_class, pair_index)
+                DO UPDATE SET winner_id=excluded.winner_id, method='авто', day=excluded.day
+            """, (tournament_id, wc, p, a1, day))
+            written.append(f"{wc}|{p}")
+        else:
+            # Если пара уже решена (каскад) — пропускаем
+            if saved.get((wc, p)):
+                continue
+            # Победитель — детерминированно меньший id (имитация справедливого победителя)
+            winner = a1 if a1 < a2 else a2
+            conn.execute("""
+                INSERT INTO bracket_results (tournament_id, weight_class, pair_index, winner_id, method, day)
+                VALUES (?,?,?,?, 'единогласное', ?)
+                ON CONFLICT(tournament_id, weight_class, pair_index)
+                DO UPDATE SET winner_id=excluded.winner_id, method='единогласное', day=excluded.day
+            """, (tournament_id, wc, p, winner, day))
+            written.append(f"{wc}|{p}")
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True, 'day': day, 'written': len(written), 'pairs': written})
+
+
+@app.route('/api/tournaments/<int:tournament_id>/reset-day/<int:day>', methods=['POST'])
+def reset_day(tournament_id, day):
+    """Отменить «проведение» дня N демо-турнира: удаляет результаты пар этого дня,
+    включая авто-победителей, оставляя остальные дни нетронутыми."""
+    if not data_dir_is_demo(tournament_id):
+        return jsonify({'error': 'Доступно только для демо-турнира'}), 400
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM bracket_results WHERE tournament_id=? AND day=?",
+        (tournament_id, day))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True, 'day': day, 'reset': True})
+
+
+def data_dir_is_demo(tournament_id):
+    """Признак «демо»-турнира для включения кнопок авто-проведения."""
+    conn = get_db()
+    t = conn.execute("SELECT id, name FROM tournaments WHERE id=?", (tournament_id,)).fetchone()
+    conn.close()
+    if not t:
+        return False
+    return ('демо' in (t['name'] or '').lower()) or ('Демо' in (t['name'] or ''))
+
+
 @app.route('/api/tournaments/<int:tournament_id>/bracket-results', methods=['GET'])
 def get_bracket_results(tournament_id):
     """Получить сохранённые победители пар сетки."""
@@ -1246,6 +1417,312 @@ def get_bracket_results(tournament_id):
     )
     conn.close()
     return jsonify(rows)
+
+
+# ======================== ЭКСПОРТ / ИМПОРТ ТУРНИРА (XML) ========================
+
+def _q(tag, val):
+    """Вспомогательная функция для создания элемента с числовым/текстовым значением."""
+    el = ET.Element(tag)
+    if isinstance(val, bool):
+        val = '1' if val else '0'
+    el.text = '' if val is None else str(val)
+    return el
+
+
+def _clean(s):
+    """Экранирование необязательно — ET сам экранирует текст и атрибуты."""
+    return '' if s is None else str(s)
+
+
+@app.route('/api/tournaments/<int:tournament_id>/export', methods=['GET'])
+def export_tournament_xml(tournament_id):
+    """Экспортировать соревнование (реквизиты + спортсмены + жеребьёвка + результаты пар) в XML.
+
+    Формат файла (корневой элемент <boxing_tournament>):
+      <tournament>  — реквизиты соревнования
+      <athletes>    — полные профили спортсменов-участников
+      <lottery>     — жеребьёвка (слоты по весовым категориям)
+      <results>     — сохранённые победители пар сетки
+    Спортсмены внутри <athletes> несут локальный id (myid), на который ссылаются
+    <lottery> и <results> — чтобы импорт сам сгенерировал новые id в базе получателя.
+    """
+    conn = get_db()
+    tournament = conn.execute(
+        "SELECT id, name, date_from, date_to, weight_step, days, completed, "
+        "chief_referee, chief_secretary, venue FROM tournaments WHERE id = ?",
+        (tournament_id,)).fetchone()
+    if tournament is None:
+        conn.close()
+        return jsonify({'error': 'Соревнование не найдено'}), 404
+
+    athlete_ids = [r['athlete_id'] for r in conn.execute(
+        "SELECT athlete_id FROM tournament_athletes WHERE tournament_id = ?",
+        (tournament_id,)).fetchall()]
+
+    # Профили спортсменов
+    athletes = []
+    if athlete_ids:
+        ph = ','.join('?' * len(athlete_ids))
+        athletes = rows_to_list(conn.execute(
+            "SELECT * FROM athletes WHERE id IN (" + ph + ")", athlete_ids).fetchall())
+
+    lottery = rows_to_list(conn.execute(
+        "SELECT athlete_id, slot, weight_class, day FROM lottery WHERE tournament_id = ? "
+        "ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+
+    # Результаты пар с именем победителя (для читабельности) — но ссылаемся по myid
+    results = rows_to_list(conn.execute(
+        "SELECT weight_class, pair_index, winner_id, method, day FROM bracket_results "
+        "WHERE tournament_id = ? ORDER BY weight_class, pair_index", (tournament_id,)).fetchall())
+    conn.close()
+
+    root = ET.Element('boxing_tournament')
+    root.set('version', '1.0')
+
+    t = ET.SubElement(root, 'tournament')
+    for key in ('name', 'date_from', 'date_to', 'weight_step', 'days', 'completed',
+                'chief_referee', 'chief_secretary', 'venue'):
+        t.append(_q(key, tournament[key]))
+
+    ath = ET.SubElement(root, 'athletes')
+    aid_to_myid = {}
+    for a in athletes:
+        ae = ET.SubElement(ath, 'athlete')
+        ae.set('myid', str(a['id']))
+        for key in ('name', 'birth_year', 'weight', 'gender', 'rank', 'region', 'coach'):
+            ae.append(_q(key, a[key]))
+        aid_to_myid[a['id']] = str(a['id'])
+
+    lot = ET.SubElement(root, 'lottery')
+    for r in lottery:
+        le = ET.SubElement(lot, 'entry')
+        le.set('athlete_id', aid_to_myid.get(r['athlete_id'], str(r['athlete_id'])))
+        le.append(_q('slot', r['slot']))
+        le.append(_q('weight_class', r['weight_class']))
+        le.append(_q('day', r['day']))
+
+    res = ET.SubElement(root, 'results')
+    for r in results:
+        re = ET.SubElement(res, 'result')
+        re.set('weight_class', str(r['weight_class']))
+        re.set('pair_index', str(r['pair_index']))
+        re.set('winner_id', aid_to_myid.get(r['winner_id'], str(r['winner_id'])))
+        re.append(_q('method', r['method']))
+        re.append(_q('day', r['day']))
+
+    # Формируем XML-строку с декларацией UTF-8
+    body = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+
+    safe_name = _clean(tournament['name']).replace('"', '').replace('/', '_').replace('\\', '_')
+    fname = f"tournament_{safe_name or tournament_id}_export.xml"
+
+    import urllib.parse
+    from flask import Response
+    resp = Response(body, mimetype='application/xml')
+    resp.headers['Content-Disposition'] = "attachment; filename*=UTF-8''" + urllib.parse.quote(fname)
+    return resp
+
+
+@app.route('/api/tournaments/import', methods=['POST'])
+def import_tournament_xml():
+    """Импортировать соревнование из XML (файл или сырой текст в поле 'xml').
+
+    Безопасно для основной базы:
+      * всегда создаётся НОВОЕ соревнование (существующие не меняются);
+      * спортсмены создаются заново (при совпадении ФИО+год+пол — переиспользуется
+        уже существующий спортсмен из текущей базы, чтобы не плодить дубликаты);
+      * жеребьёвка и результаты пар переносятся со ссылкой на новых спортсменов.
+    """
+    data = None
+    xml_text = None
+
+    # Вариант: multipart/form-data (file)
+    if request.files:
+        f = request.files.get('file')
+        if f:
+            try:
+                xml_text = f.read().decode('utf-8')
+            except Exception:
+                return jsonify({'error': 'Не удалось прочитать файл (ожидалась кодировка UTF-8)'}), 400
+
+    # Вариант: application/json {"xml": "..."}
+    if xml_text is None:
+        raw = request.get_data(as_text=True)
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = None
+        if data and data.get('xml'):
+            xml_text = data['xml']
+
+    if not xml_text:
+        return jsonify({'error': 'Отсутствуют данные XML (передайте файл или поле "xml")'}), 400
+
+    # Парсинг
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as e:
+        return jsonify({'error': 'Ошибка парсинга XML: ' + str(e)}), 400
+
+    tour_el = root.find('tournament')
+    if tour_el is None:
+        return jsonify({'error': 'Некорректный XML: отсутствует элемент <tournament>'}), 400
+
+    def _el(el, key):
+        node = el.find(key)
+        if node is None or node.text is None:
+            return ''
+        return node.text
+
+    name = (_el(tour_el, 'name') or '').strip()
+    date_from = (_el(tour_el, 'date_from') or '').strip()
+    if not name or not date_from:
+        return jsonify({'error': 'Поля name и date_from обязательны'}), 400
+
+    conn = get_db()
+
+    # 1) Создаём новое соревнование
+    cur = conn.execute(
+        "INSERT INTO tournaments (name, date_from, date_to, weight_step, days, completed, "
+        "chief_referee, chief_secretary, venue) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            name,
+            date_from,
+            (_el(tour_el, 'date_to') or date_from).strip() or date_from,
+            _safe_float(_el(tour_el, 'weight_step'), 5.0),
+            _safe_int(_el(tour_el, 'days'), 1),
+            _safe_int(_el(tour_el, 'completed'), 0),
+            (_el(tour_el, 'chief_referee') or '').strip(),
+            (_el(tour_el, 'chief_secretary') or '').strip(),
+            (_el(tour_el, 'venue') or '').strip(),
+        )
+    )
+    new_tid = cur.lastrowid
+
+    # 2) Импортируем спортсменов: myid (из файла) -> новый id в базе
+    #    Дедупликация по (name, birth_year, gender) внутри JVV импорта и против существующих.
+    new_athete_id_by_myid = {}
+    created_ids = []
+
+    # Загружаем существующих спортсменов для дедупликации
+    existing = {}
+    for r in conn.execute("SELECT * FROM athletes").fetchall():
+        key = (str(r['name']), int(r['birth_year']), str(r['gender']))
+        existing.setdefault(key, r['id'])
+
+    # Множество созданных за этот импорт, чтобы один и тот же спортсмен не дублировался
+    dup_within = {}
+
+    for ae in root.findall('.//athletes/athlete'):
+        myid = ae.get('myid')
+        aname = (_el(ae, 'name') or '').strip()
+        abirth = _safe_int(_el(ae, 'birth_year'), 0)
+        agender = (_el(ae, 'gender') or 'мужской').strip()
+        aweight = _safe_float(_el(ae, 'weight'), 0.0)
+
+        if not aname or not abirth:
+            continue  # пропускаем некорректные записи
+
+        key = (aname, abirth, agender)
+        new_id = None
+        if key in dup_within:
+            new_id = dup_within[key]
+        elif key in existing:
+            new_id = existing[key]
+        else:
+            c2 = conn.execute(
+                "INSERT INTO athletes (name, birth_year, weight, gender, rank, region, coach) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    aname, abirth, aweight, agender,
+                    (_el(ae, 'rank') or '').strip(),
+                    (_el(ae, 'region') or '').strip(),
+                    (_el(ae, 'coach') or '').strip(),
+                )
+            )
+            new_id = c2.lastrowid
+            existing[key] = new_id
+            dup_within[key] = new_id
+            created_ids.append(new_id)
+
+        if myid is not None:
+            new_athete_id_by_myid[myid] = new_id
+
+    # 3) Привязываем спортсменов к турниру
+    for myid, real_id in new_athete_id_by_myid.items():
+        conn.execute(
+            "INSERT OR IGNORE INTO tournament_athletes (tournament_id, athlete_id) VALUES (?, ?)",
+            (new_tid, real_id)
+        )
+
+    # 4) Жеребьёвка
+    for le in root.findall('.//lottery/entry'):
+        src = le.get('athlete_id')
+        real_id = new_athete_id_by_myid.get(src)
+        if real_id is None:
+            continue
+        conn.execute(
+            "INSERT INTO lottery (tournament_id, athlete_id, slot, weight_class, day) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                new_tid,
+                real_id,
+                _safe_int(_el(le, 'slot'), 0),
+                (_el(le, 'weight_class') or '').strip(),
+                _safe_int(_el(le, 'day'), 1),
+            )
+        )
+
+    # 5) Результаты пар сетки
+    for re in root.findall('.//results/result'):
+        src = re.get('winner_id')
+        real_winner = new_athete_id_by_myid.get(src)
+        if real_winner is None:
+            continue
+        wc = re.get('weight_class', '')
+        pi = _safe_int(re.get('pair_index'), -1)
+        if not wc or pi < 0:
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO bracket_results "
+            "(tournament_id, weight_class, pair_index, winner_id, method, day) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                new_tid, wc, pi, real_winner,
+                (_el(re, 'method') or '').strip(),
+                _safe_int(_el(re, 'day'), 1),
+            )
+        )
+
+    conn.commit()
+
+    # Собираем статистику
+    result = {
+        'success': True,
+        'tournament_id': new_tid,
+        'name': name,
+        'athletes_created': len(created_ids),
+        'athletes_linked': len(new_athete_id_by_myid),
+        'lottery_entries': len(root.findall('.//lottery/entry')),
+        'results_entries': len(root.findall('.//results/result')),
+    }
+    conn.close()
+    return jsonify(result), 201
+
+
+def _safe_int(v, default=0):
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _safe_float(v, default=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return default
 
 
 @app.route('/api/tournaments/<int:tournament_id>/bracket-results', methods=['DELETE'])
@@ -3248,6 +3725,245 @@ def report_sostav_par(tournament_id):
     buf.seek(0)
     return send_file(buf, as_attachment=True,
                      download_name=f"sostav_par_{tournament_id}.docx",
+                     mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
+@app.route('/api/report/<int:tournament_id>/grso', methods=['GET'])
+def report_grso(tournament_id):
+    """Сформировать «Протокол графиков соревнований» на основе grso_tmp.docx.
+
+    Шаблон содержит: заголовок ({TOURNAMENT_NAME}, {DATE1-DATE2_YEAR}),
+    абзац-прототип с {WEIGHT_CLASS} и ОДНУ таблицу-прототип на 4 слота
+    ({SLOT1_NAME},{SLOT1_CLUB},{SLOT1_YEAR}, {SLOTS-1-2_COACH}, ... {SLOTS_CHAMPION}).
+
+    Под каждую весовую категорию дублируется блок «абзац + таблица» и заполняется
+    данными из жеребьёвки и bracket_results. Победители пар — из результатов боя.
+    """
+    if not _HAS_DOCX:
+        return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
+    from io import BytesIO
+    import re as _re
+    import copy as _copy
+    from collections import defaultdict as _dd
+    from docx import Document as _Doc
+
+    # Найти шаблон grso_tmp.docx
+    tmpl = None
+    for cand in (os.path.join(PROJECT_DIR, 'grso_tmp.docx'),
+                 os.path.join(ASSETS_DIR, 'grso_tmp.docx'),
+                 os.path.join(_get_data_dir(), 'grso_tmp.docx')):
+        if os.path.exists(cand):
+            tmpl = cand
+            break
+    if not tmpl:
+        return jsonify({'error': 'Шаблон протокола графиков (grso_tmp.docx) не найден'}), 500
+
+    # Данные турнира и жеребьёвки
+    conn = get_db()
+    t = row_to_dict(conn.execute("SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
+    if t is None:
+        conn.close()
+        return jsonify({'error': 'Соревнование не найдено'}), 404
+    lottery = rows_to_list(conn.execute(
+        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+    results = rows_to_list(conn.execute(
+        "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
+    ath_ids = [r['athlete_id'] for r in conn.execute(
+        "SELECT athlete_id FROM lottery WHERE tournament_id=?", (tournament_id,)).fetchall()]
+    conn.close()
+
+    athletes = []
+    if ath_ids:
+        _ph = ','.join('?' * len(ath_ids))
+        connb = get_db()
+        athletes = rows_to_list(connb.execute(f"SELECT * FROM athletes WHERE id IN ({_ph})", ath_ids).fetchall())
+        connb.close()
+    by_id = {a['id']: a for a in athletes}
+
+    # Группируем по весовым категориям
+    groups = _dd(list); order = []
+    for s in lottery:
+        if s['weight_class'] not in groups:
+            order.append(s['weight_class'])
+        groups[s['weight_class']].append(s)
+    for wc in groups:
+        groups[wc].sort(key=lambda x: x['slot'])
+    order.sort(key=lambda wc: (
+        0 if ('жен' in wc) else 1,  # женские категории идут первыми
+        float((_re.search(r'(\d+(?:\.\d+)?)', wc or '') or _re.search(r'0', '0')).group(1) or 0)
+    ))
+
+    def _fmt_date(s):
+        p = (s or '').split('-')
+        return f'{p[2]}.{p[1]}.{p[0]}' if len(p) == 3 else (s or '').replace('-', '.')
+    d1 = _fmt_date(t.get('date_from') or '')
+    d2 = _fmt_date(t.get('date_to') or t.get('date_from') or '')
+    dates = f'{d1} — {d2}' if d2 and d2 != d1 else d1
+
+    from docx.oxml.ns import qn as _qn
+    from docx.oxml import parse_xml as _px
+    _WNS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+
+    def _all_t(el):
+        return ''.join(_n.text or '' for _n in el.iter(_qn('w:t')))
+
+    def _replace_in_el(el, mapping):
+        # объединяем текст и заменяем маркеры (маркер может быть разбит на w:t)
+        for p in el.iter(_qn('w:p')):
+            runs = p.findall(_qn('w:r'))
+            if not runs:
+                continue
+            full = ''.join(rt.text or '' for r in runs for rt in r.findall(_qn('w:t')))
+            changed = False
+            for k, v in mapping.items():
+                if k in full:
+                    full = full.replace(k, str(v))
+                    changed = True
+            if changed:
+                ts0 = runs[0].findall(_qn('w:t'))
+                if ts0:
+                    ts0[0].text = full
+                    for r in runs[1:]:
+                        for rt in r.findall(_qn('w:t')):
+                            rt.text = ''
+
+    doc = _Doc(tmpl)
+
+    # Заголовок (колонтитулы и тело)
+    for sec in doc.sections:
+        for pn in ('header', 'footer', 'first_page_header', 'first_page_footer'):
+            try:
+                _replace_in_el(getattr(sec, pn)._element, {
+                    '{TOURNAMENT_NAME}': t.get('name') or '',
+                    '{DATE1-DATE2_YEAR}': dates,
+                })
+            except Exception:
+                pass
+    _replace_in_el(doc.element.body, {
+        '{TOURNAMENT_NAME}': t.get('name') or '',
+        '{DATE1-DATE2_YEAR}': dates,
+    })
+
+    # Находим прототип: абзац с {WEIGHT_CLASS} + следующую за ним таблицу
+    body = doc.element.body
+    _W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    proto_para = None
+    proto_tbl = None
+    children = list(body)
+    for i, ch in enumerate(children):
+        if ch.tag == _W + 'p' and '{WEIGHT_CLASS}' in _all_t(ch):
+            proto_para = ch
+            # следующая за ним таблица
+            for j in range(i + 1, len(children)):
+                if children[j].tag == _W + 'tbl':
+                    proto_tbl = children[j]
+                    break
+            break
+    if proto_para is None or proto_tbl is None:
+        return jsonify({'error': 'В шаблоне grso_tmp.docx не найден блок-прототип'}), 500
+
+    def _name(slot_id):
+        a = by_id.get(slot_id)
+        return a['name'] if a else ''
+    def _club(slot_id):
+        a = by_id.get(slot_id)
+        return ((a.get('region') or '').replace('Калмыкия', '').strip()) if a else ''
+    def _year(slot_id):
+        a = by_id.get(slot_id)
+        try:
+            return int(str(a['birth_year'] or '').strip()) if a and a.get('birth_year') else ''
+        except Exception:
+            return ''
+    def _winner_of(pair):
+        # pair = (a1, a2, winner_id, method)
+        return pair[2] if pair and len(pair) >= 3 and pair[2] is not None else None
+
+    # Для каждой категории клонируем блок прототипа
+    anchor = proto_para  # вставляем после последнего добавленного
+    try:
+        for wc in order:
+            slots = groups[wc]
+            if not slots:
+                continue
+            rounds, champion, silver, bronzes = _build_weight_rounds(slots, results)
+            first_round = rounds[0] if rounds else []
+            pair1 = first_round[0] if len(first_round) >= 1 else None
+            pair2 = first_round[1] if len(first_round) >= 2 else None
+
+            # Берём до 4 слотов по жеребьёвке
+            slot_ids = [s['athlete_id'] for s in slots]
+            s1 = slot_ids[0] if len(slot_ids) > 0 else None
+            s2 = slot_ids[1] if len(slot_ids) > 1 else None
+            s3 = slot_ids[2] if len(slot_ids) > 2 else None
+            s4 = slot_ids[3] if len(slot_ids) > 3 else None
+
+            w1 = _winner_of(pair1)
+            w2 = _winner_of(pair2)
+            if champion is None:
+                champion = _winner_of(pair1) if len(slot_ids) <= 2 else None
+
+            mapping = {
+                '{WEIGHT_CLASS}': wc,
+                '{SLOT1_NAME}': _name(s1), '{SLOT1_CLUB}': _club(s1), '{SLOT1_YEAR}': _year(s1),
+                '{SLOT2_NAME}': _name(s2), '{SLOT2_CLUB}': _club(s2), '{SLOT2_YEAR}': _year(s2),
+                '{SLOT3_NAME}': _name(s3), '{SLOT3_CLUB}': _club(s3), '{SLOT3_YEAR}': _year(s3),
+                '{SLOT4_NAME}': _name(s4), '{SLOT4_CLUB}': _club(s4), '{SLOT4_YEAR}': _year(s4),
+                '{SLOTS-1-2_COACH}': _name(w1),
+                '{SLOTS-3-4_COACH}': _name(w2),
+                '{SLOTS_CHAMPION}': _name(champion) if champion else '',
+            }
+
+            new_para = _copy.deepcopy(proto_para)
+            new_tbl = _copy.deepcopy(proto_tbl)
+            _replace_in_el(new_para, mapping)
+            _replace_in_el(new_tbl, mapping)
+            # Рендерим только заполненные слоты: если участников N, оставляем первые N слотов
+            # (каждый слот в шаблоне занимает 2 строки: слот1=строки0-1, слот2=2-3, ...),
+            # а строки неиспользуемых слотов удаляем.
+            n_use_slots = max(1, min(len(slot_ids), 4))
+            _trs = new_tbl.findall(_qn('w:tr'))
+            for _slot_k in range(4, n_use_slots, -1):
+                # слот _slot_k (1-based) = строки [(_slot_k-1)*2, _slot_k*2-1]
+                _r_i = (_slot_k - 1) * 2
+                for _ri in range(_slot_k * 2 - 1, _r_i - 1, -1):
+                    if _ri < len(_trs):
+                        _tr = _trs[_ri]
+                        if _tr.getparent() is not None:
+                            _tr.getparent().remove(_tr)
+            # «cantSplit» на каждой строке: Word не разрывает категорию между страницами,
+            # а целиком переносит на новый лист, если в конце листа не хватает места.
+            for _tr in new_tbl.findall(_qn('w:tr')):
+                _trPr = _tr.find(_qn('w:trPr'))
+                if _trPr is None:
+                    _trPr = _px('<w:trPr xmlns:w="%s"/>' % _WNS)
+                    _tr.insert(0, _trPr)
+                if _trPr.find(_qn('w:cantSplit')) is None:
+                    _trPr.append(_px('<w:cantSplit xmlns:w="%s"/>' % _WNS))
+            # Вставляем: сначала таблица (new_tbl) сразу после anchor, затем абзац
+            # (new_para) тоже сразу после anchor — тот сдвинет таблицу дальше, и итог
+            # будет [anchor, new_para, new_tbl] = сначала категория, потом таблица.
+            if anchor is not None:
+                anchor.addnext(new_tbl)
+                anchor.addnext(new_para)
+            else:
+                body.insert(list(body).index(proto_tbl) if proto_tbl in list(body) else len(list(body)), new_tbl)
+                body.insert(list(body).index(proto_para) if proto_para in list(body) else len(list(body)), new_para)
+            anchor = new_tbl
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': f'Ошибка заполнения: {e}'}), 500
+
+    # Удаляем прототип
+    if proto_para.getparent() is not None:
+        body.remove(proto_para)
+    if proto_tbl.getparent() is not None:
+        body.remove(proto_tbl)
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True,
+                     download_name=f"protokol_grafikov_{tournament_id}.docx",
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
 

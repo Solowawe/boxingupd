@@ -52,22 +52,30 @@
                     </form>
                     <div class="tournament-list">
                         <h3>Соревнования</h3>
-                        <div class="import-section" style="margin-top: 15px; padding: 15px; border: 1px solid rgba(255,215,0,0.15); border-radius: 6px; background: rgba(255,255,255,0.05);">
-                            <p style="margin: 0 0 10px 0; font-size: 0.9em; color: rgba(255,255,255,0.7);">📥 Импорт списка спортсменов (Word / Excel)</p>
-                            <div class="form-row">
-                                <input type="file" id="athletes-import" accept=".docx,.xls,.xlsx" style="flex:2;">
-                                <select id="athletes-import-gender" style="flex:0;">
-                                    <option value="мужской">Мужской</option>
-                                    <option value="женский">Женский</option>
-                                </select>
-                                <button id="import-athletes-btn" class="btn-primary" style="flex:0;">Импорт</button>
+<div class="import-section" style="margin-top: 15px; padding: 15px; border: 1px solid rgba(255,215,0,0.15); border-radius: 6px; background: rgba(255,255,255,0.05);">
+                                <p style="margin: 0 0 10px 0; font-size: 0.9em; color: rgba(255,255,255,0.7);">📥 Импорт списка спортсменов (Word / Excel)</p>
+                                <div class="form-row">
+                                    <input type="file" id="athletes-import" accept=".docx,.xls,.xlsx" style="flex:2;">
+                                    <select id="athletes-import-gender" style="flex:0;">
+                                        <option value="мужской">Мужской</option>
+                                        <option value="женский">Женский</option>
+                                    </select>
+                                    <button id="import-athletes-btn" class="btn-primary" style="flex:0;">Импорт</button>
+                                </div>
+                                <div id="import-status" class="info" style="margin-top:8px; font-size:0.9em;"></div>
+                                <div class="form-row" style="margin-top:8px;">
+                                    <label style="margin-right:16px; font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="append" checked style="accent-color:#ffd700;"> Дополнить список</label>
+                                    <label style="font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="replace" style="accent-color:#ffd700;"> Заменить список (удалить старых)</label>
+                                </div>
                             </div>
-                            <div id="import-status" class="info" style="margin-top:8px; font-size:0.9em;"></div>
-                            <div class="form-row" style="margin-top:8px;">
-                                <label style="margin-right:16px; font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="append" checked style="accent-color:#ffd700;"> Дополнить список</label>
-                                <label style="font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="replace" style="accent-color:#ffd700;"> Заменить список (удалить старых)</label>
+                            <div class="import-section" style="margin-top: 10px; padding: 15px; border: 1px solid rgba(255,215,0,0.15); border-radius: 6px; background: rgba(255,255,255,0.05);">
+                                <p style="margin: 0 0 10px 0; font-size: 0.9em; color: rgba(255,255,255,0.7);">📦 Импорт соревнования из XML (создаёт новое соревнование, не затрагивая существующие)</p>
+                                <div class="form-row">
+                                    <input type="file" id="tournament-import-file" accept=".xml" style="flex:2;">
+                                    <button id="tournament-import-btn" class="btn-primary" style="flex:0;">Загрузить турнир</button>
+                                </div>
+                                <div id="tournament-import-status" class="info" style="margin-top:8px; font-size:0.9em;"></div>
                             </div>
-                        </div>
                         <div id="tournaments-container"></div>
                     </div>
                 </div>
@@ -183,6 +191,14 @@
                             <option value="">-- Выберите соревнование --</option>
                         </select>
                         <button id="generate-lottery" class="btn-primary">🎲 Провести жеребьевку</button>
+                        <button id="save-lottery-btn" class="btn-primary" style="display:none;" onclick="App.saveLotteryFromUI()">💾 Сохранить жеребьевку</button>
+                        <button id="pairs-download-btn" class="btn-secondary" style="display:none;">🤼 Состав пар</button>
+                        <button id="grso-download-btn" class="btn-secondary" style="display:none;">📈 Протокол графиков</button>
+                    </div>
+                    <div id="lottery-gender-filter" style="display:none; margin-top:10px; gap:8px; justify-content:center; flex-wrap:wrap;">
+                        <button class="btn-secondary lottery-gender-tab active" data-gender="all" onclick="App.setLotteryGender('')">Все</button>
+                        <button class="btn-secondary lottery-gender-tab" data-gender="мужской" onclick="App.setLotteryGender('мужской')">Юноши</button>
+                        <button class="btn-secondary lottery-gender-tab" data-gender="женский" onclick="App.setLotteryGender('женский')">Девушки</button>
                     </div>
                     </div>
                     <div id="lottery-container"></div>
@@ -202,6 +218,17 @@
                             <button id="generate-bracket" class="btn-primary">🔄 Сформировать сетку</button>
                             <button id="clear-bracket" class="btn-secondary" style="background:rgba(255,0,0,0.1);border-color:rgba(255,0,0,0.3);color:#ff6b6b;" title="Сбросить сетку в первоначальный вид (удалить все результаты боёв)">🔄 Сбросить сетку</button>
                         </div>
+                        <div id="bracket-filter-controls" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+                            <select id="bracket-filter-gender" style="padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
+                                <option value="">Все пол</option>
+                                <option value="мужской">Мужской</option>
+                                <option value="женский">Женский</option>
+                            </select>
+                            <select id="bracket-filter-weight" style="padding:8px 12px;border:1px solid rgba(255,215,0,0.3);background:rgba(255,255,255,0.1);color:#e0e0e0;border-radius:6px;">
+                                <option value="">Все весовые категории</option>
+                            </select>
+                        </div>
+                        <div id="bracket-day-tabs" style="display:none; margin-top:10px; gap:8px; justify-content:center; flex-wrap:wrap;"></div>
                     </div>
                     <div id="weight-classes-selector" style="margin-top:15px; display:none;">
                         <!-- Блок выбора категорий временно отключён (закомментирован)

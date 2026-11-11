@@ -590,6 +590,22 @@ td.editable:hover {
     flex: 1;
 }
 
+.fighter-num {
+    font-weight: 600;
+    font-size: 0.8em;
+    color: #ffd700;
+    margin-right: 6px;
+    min-width: 22px;
+    flex-shrink: 0;
+}
+
+.fighter-id {
+    font-size: 0.8em;
+    color: rgba(255,255,255,0.65);
+    margin-right: 6px;
+    flex-shrink: 0;
+}
+
 .crown {
     font-size: 1em;
     margin-left: 6px;
@@ -1291,6 +1307,14 @@ td.editable:hover {
     color: #e0e0e0;
 }
 
+/* Выпадающие списки: тёмный шрифт пунктов на светлом фоне,
+   чтобы текст был читабельным (нативный рендер option светлый). */
+select option {
+    background-color: #ffffff;
+    color: #1a1a2e;
+    color-scheme: light;
+}
+
 /* Метка дня в раундах сетки */
 .day-tag {
     display: inline-block;
@@ -1421,4 +1445,38 @@ td.editable:hover {
         color: #000;
         page-break-inside: avoid;
     }
+}
+
+/* ===== Читабельность выпадающих меню =====
+   Нативный рендер <option> в браузерах использует светлый фон, поэтому
+   пунктам задаём тёмный шрифт, перекрывая любые частные правила. */
+select option,
+select optgroup option,
+.form-row select option,
+.inline-edit option,
+#fight-winner option,
+.fighter-select option,
+.fight-winner-select option,
+.lottery-select option,
+.lottery-day-select option,
+#bracket-controls select option,
+#bracket-filter-gender option,
+#bracket-filter-weight option {
+    background-color: #ffffff;
+    color: #1a1a2e;
+    color-scheme: light;
+}
+
+/* Сам селект в закрытом состоянии тоже делаем лучше читабельным
+   (тёмный текст на светлом — инвертируем, чтобы совпадало с опциями) */
+select,
+.form-row select,
+.inline-edit,
+.lottery-select,
+.lottery-day-select,
+.fighter-select,
+.fight-winner-select {
+    color-scheme: light;
+    color: #1a1a2e;
+    background-color: #ffffff;
 }

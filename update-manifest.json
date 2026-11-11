@@ -1,5 +1,5 @@
 {
-  "version": "1.0.88",
+  "version": "1.0.98",
   "files": [
     "app.js",
     "index.html",
@@ -11,6 +11,7 @@
     "requirements.txt",
     "update-manifest.json",
     "reglament_tmp.docx",
+    "grso_tmp.docx",
     "boxingapp.exe"
   ]
 }

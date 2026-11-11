@@ -515,6 +515,7 @@ async openAbout() {
         this.setupExcelImport();
         this.setupWordImport();
         this.setupAthletesImport();
+        this.setupTournamentImport();
         this.setupExport();
         this.setupTournamentForm();
         this.setupParticipantForm();
@@ -1153,6 +1154,31 @@ async openAbout() {
         }
     },
 
+    // Экспорт соревнования в XML (для переноса между базами без потери данных)
+    async exportTournamentXml(tournamentId) {
+        try {
+            const tournament = await API.getTournament(tournamentId);
+            const res = await fetch(`/api/tournaments/${tournamentId}/export`);
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                toast('Ошибка экспорта: ' + (err.error || res.statusText), 'error');
+                return;
+            }
+            const blob = await res.blob();
+            const fname = `tournament_${(tournament.name || tournamentId).replace(/\s+/g, '_').replace(/["\\/]/g, '')}_export.xml`;
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = fname;
+            link.click();
+            URL.revokeObjectURL(url);
+            this.renderTournaments();
+            toast(`✅ Соревнование экспортировано в XML: ${fname}`, 'success');
+        } catch (err) {
+            toast('Ошибка экспорта: ' + err.message, 'error');
+        }
+    },
+
     // Экспорт протокола результатов соревнования в Excel (3 листа: участники, бои, призёры)
     exportProtocolToExcel(tournamentId) {
         try {
@@ -1224,6 +1250,45 @@ async openAbout() {
         a.click();
         document.body.removeChild(a);
         toast('📄 Отчёт главного судьи формируется…', 'info', 3000);
+    },
+
+    // Скачивание «Протокола графиков соревнований» (.docx) из шаблона grso_tmp.docx
+    downloadGrso(tournamentId) {
+        const a = document.createElement('a');
+        a.href = `/api/report/${tournamentId}/grso`;
+        a.download = `protokol_grafikov_${tournamentId}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast('📈 Протокол графиков формируется…', 'info', 3000);
+    },
+
+    // Автоматически «провести» день N демо-турнира (сгенерировать схватки + победители)
+    async simulateDay(tournamentId, day) {
+        if (!confirm(`Провести день ${day}? Схватки этого дня будут сгенерированы и будут назначены победители.`)) return;
+        try {
+            const r = await fetch(`/api/tournaments/${tournamentId}/simulate-day/${day}`, { method: 'POST' }).then(x => x.json());
+            if (r.error) { toast('❌ ' + r.error, 'error'); return; }
+            toast(`✅ День ${day} проведён: ${r.written} схваток/побед назначено`, 'success', 4000);
+            await this.renderTournaments();
+            await this.renderBracketSelect();
+        } catch (e) {
+            toast('❌ Ошибка: ' + e.message, 'error');
+        }
+    },
+
+    // Отменить проведение дня N демо-турнира
+    async resetDay(tournamentId, day) {
+        if (!confirm(`Отменить проведение дня ${day}? Результаты схваток этого дня будут удалены.`)) return;
+        try {
+            const r = await fetch(`/api/tournaments/${tournamentId}/reset-day/${day}`, { method: 'POST' }).then(x => x.json());
+            if (r.error) { toast('❌ ' + r.error, 'error'); return; }
+            toast(`↩️ День ${day} отменён`, 'success', 3000);
+            await this.renderTournaments();
+            await this.renderBracketSelect();
+        } catch (e) {
+            toast('❌ Ошибка: ' + e.message, 'error');
+        }
     },
 
     openReportInNewTab(tournamentId) {
@@ -1729,6 +1794,52 @@ setupAthletesImport() {
         });
     },
 
+    // Импорт соревнования из XML-файла (создаёт новое соревнование, не затрагивая существующие)
+    setupTournamentImport() {
+        const btn = document.getElementById('tournament-import-btn');
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+            const fileInput = document.getElementById('tournament-import-file');
+            const file = fileInput.files[0];
+            if (!file) {
+                toast('Выберите XML-файл соревнования!', 'warning');
+                return;
+            }
+            const statusEl = document.getElementById('tournament-import-status');
+            if (statusEl) statusEl.textContent = '⏳ Импорт…';
+            if (btn) btn.disabled = true;
+            try {
+                const fd = new FormData();
+                fd.append('file', file);
+                const res = await fetch('/api/tournaments/import', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    const msg = data.error || 'Ошибка импорта XML';
+                    if (statusEl) statusEl.textContent = '❌ ' + msg;
+                    toast(msg, 'error');
+                    if (btn) btn.disabled = false;
+                    return;
+                }
+                if (statusEl) statusEl.textContent =
+                    `✅ Загружен «${data.name}»: создано спортсменов ${data.athletes_created}, ` +
+                    `связано ${data.athletes_linked}, жеребьёвка ${data.lottery_entries}, ` +
+                    `результаты ${data.results_entries}.`;
+                toast(`✅ Соревнование «${data.name}» импортировано (id ${data.tournament_id})`, 'success', 6000);
+                fileInput.value = '';
+                await this.renderTournaments();
+                await this.renderBracketSelect();
+                await this.renderResultsSelect();
+                await this.applyDefaultTournament();
+            } catch (e) {
+                if (statusEl) statusEl.textContent = '❌ Ошибка импорта: ' + e.message;
+                toast('Ошибка импорта: ' + e.message, 'error');
+            } finally {
+                if (btn) btn.disabled = false;
+                if (fileInput) fileInput.value = '';
+            }
+        });
+    },
+
     // Читает Excel-файл и добавляет бойцов; список уже очищен вызывающей стороной
     async _importExcelRows(file, tournamentId) {
         const reader = new FileReader();
@@ -2193,6 +2304,26 @@ setupExport() {
                             ? `${this.fmtDate(t.date_from)}${t.date_to ? ' — ' + this.fmtDate(t.date_to) : ''}`
                             : '';
                 const isDefault = defaultId && parseInt(defaultId) === t.id;
+                // Число дней турнира по календарному интервалу дат
+                let _nDays = Math.max(1, parseInt(t.days) || 1);
+                if (t.date_from && t.date_to) {
+                    const _df = new Date(t.date_from + 'T00:00:00');
+                    const _dt = new Date(t.date_to + 'T00:00:00');
+                    if (!isNaN(_df) && !isNaN(_dt) && _dt >= _df) {
+                        _nDays = Math.max(_nDays, Math.round((_dt - _df) / 86400000) + 1);
+                    }
+                }
+                const _isDemo = String(t.name || '').toLowerCase().includes('демо');
+                let _dayBtns = '';
+                if (_isDemo) {
+                    _dayBtns = '<div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap;">';
+                    for (let _d = 1; _d <= _nDays; _d++) {
+                        _dayBtns += `<button class="btn-secondary" onclick="App.simulateDay(${t.id},${_d})">✅ Провести день ${_d}</button>`;
+                        _dayBtns += `<button class="btn-secondary" style="color:#ff6b6b;" onclick="App.resetDay(${t.id},${_d})">↩️ Отмена дня ${_d}</button>`;
+                        _dayBtns += '&nbsp;&nbsp;';
+                    }
+                    _dayBtns += '</div>';
+                }
                 const card = document.createElement('div');
                 card.className = 'tournament-card';
                 if (isDefault) card.style.borderLeft = '4px solid #ffd700';
@@ -2203,15 +2334,19 @@ setupExport() {
                     </div>
                     <div>
                         <button class="btn-secondary" onclick="App.setDefaultTournament(${t.id})">${isDefault ? '⭐ Уже по умолчанию' : '⬇ По умолчанию'}</button>
+                        <button class="btn-secondary" onclick="App.editTournament(${t.id})">✏️ Редактировать</button>
                         <button class="btn-secondary" onclick="App.manageParticipants(${t.id})">👥 Участники</button>
                         <button class="btn-secondary" onclick="App.editJudges(${t.id})">⚖️ Судьи</button>
                         <button class="btn-secondary" onclick="App.exportTournamentToExcel(${t.id})">📊 Excel</button>
                         <button class="btn-secondary" onclick="App.exportProtocolToExcel(${t.id})">📤 Протокол</button>
+                        <button class="btn-secondary" onclick="App.exportTournamentXml(${t.id})">📦 Экспорт XML</button>
                         <button class="btn-secondary" onclick="App.downloadJudgeReport(${t.id})">📄 Отчёт гл. судьи</button>
                         <button class="btn-secondary" onclick="App.downloadPairs(${t.id}, ${t.days || 1}, '${t.date_from || ''}', '${t.date_to || ''}')">🤼 Состав пар</button>
+                        <button class="btn-secondary" onclick="App.downloadGrso(${t.id})">📈 Протокол графиков</button>
                         <button class="btn-secondary" style="color: #ff6b6b;" onclick="App.clearParticipants(${t.id})">🗑 Очистить участников</button>
                         <button class="btn-secondary" onclick="App.deleteTournament(${t.id})">❌ Удалить соревнование</button>
                     </div>
+                    ${_dayBtns}
                 `;
                 container.appendChild(card);
             });
@@ -2221,10 +2356,59 @@ setupExport() {
         }
     },
 
-    setDefaultTournament(id) {
+    async setDefaultTournament(id) {
         this.saveDefaultTournament(id);
         toast('Соревнование установлено по умолчанию! Оно будет автоматически выбрано во всех разделах.');
-        this.renderTournaments();
+        try {
+            await this.renderBracketSelect();   // Сетка
+            await this.renderResultsSelect();   // Результаты
+            await this.applyDefaultTournament(); // Жеребьёвка, Взвешивание, Участники
+            await this.loadBracketFromDB();      // Догружаем сетку/результаты выбранного турнира
+        } catch (err) {
+            console.error('Ошибка применения соревнования по умолчанию:', err);
+        }
+        await this.renderTournaments();
+    },
+
+    async editTournament(id) {
+        try {
+            const t = await API.getTournament(id);
+            const newName = prompt('Название соревнования:', t.name || '');
+            if (newName === null || !String(newName).trim()) return;
+            const newFrom = prompt('Дата начала (ГГГГ-ММ-ДД):', t.date_from || '');
+            if (newFrom === null) return;
+            const newTo = prompt('Дата окончания (ГГГГ-ММ-ДД):', t.date_to || t.date_from || '');
+            if (newTo === null) return;
+            const newDays = prompt('Число дней турнира (1-14):', t.days || 1);
+            if (newDays === null) return;
+            const newStep = prompt('Шаг веса (кг):', t.weight_step || 5);
+            if (newStep === null) return;
+            const chiefReferee = prompt('Главный судья:', t.chief_referee || '');
+            if (chiefReferee === null) return;
+            const chiefSecretary = prompt('Главный секретарь:', t.chief_secretary || '');
+            if (chiefSecretary === null) return;
+            const venue = prompt('Место проведения:', t.venue || '');
+            if (venue === null) return;
+
+            await API.updateTournament(id, {
+                name: String(newName).trim(),
+                date_from: String(newFrom).trim(),
+                date_to: String(newTo).trim(),
+                days: parseInt(newDays) || 1,
+                weight_step: parseFloat(newStep) || 5,
+                chief_referee: String(chiefReferee).trim(),
+                chief_secretary: String(chiefSecretary).trim(),
+                venue: String(venue).trim(),
+            });
+            toast('✅ Соревнование обновлено', 'success');
+            await this.renderTournaments();
+            await this.renderBracketSelect();
+            await this.renderResultsSelect();
+            await this.applyDefaultTournament();
+            if (this.loadParticipantSelect) await this.loadParticipantSelect();
+        } catch (err) {
+            toast('Ошибка редактирования: ' + err.message, 'error');
+        }
     },
 
     async deleteTournament(id) {
@@ -2409,10 +2593,12 @@ setupExport() {
 
     // Авторасстановка дней бойцов по позиции в олимпийской сетке.
     // ordered — массив слотов из _pairAndPlaceLottery (null = бай/пустой слот),
-    // длина = ближайшая степень двойки. Каждая ПАРА 1-го раунда получает свой день
-    // последовательно (пары по порядку). День бойца = день его первого боя, распределённый
-    // равномерно по числу дней турнира: бои идут подряд, и вся последовательность
-    // делится на суммарное число дней (5 бойцов: б1-б2→Д1, б3-б4→Д2, полуфинал→Д2, финал→Д3).
+    // длина = ближайшая степень двойки.
+    // Бои нумеруются последовательно по ходу сетки (пары 1-го раунда подряд,
+    // затем следующие раунды) и заполняют дни ПО 3 БОЯ в день с первого дня:
+    // бой N попадает в день ceil(N/3). Так пары 1-го раунда идут одним днём,
+    // а бай (нечётный боец, у которого firstFight в следующем раунде) ждёт соперника
+    // в следующий день.
     _autoAssignDayByRound(ordered, totalDays) {
         const totalDaysC = Math.max(1, parseInt(totalDays) || 1);
         const n = ordered.length;
@@ -2443,16 +2629,12 @@ setupExport() {
             cur = next;
             if (cur.length <= 1) break;
         }
-        // сколько всего боёв (для равномерного распределения по дням)
-        const totalFights = fightNum;
+        // День боя = по 3 боя в день (ceil(fn/3)), начиная с первого дня.
+        // Это и есть требование «в категории 6+ бойцов в день ровно 3 боя»:
+        // пары 1-го раунда (первые 3 боя) идут одним днём, далее заполняются следующие дни.
         const dayForFight = (fn) => {
             if (fn <= 0) return 1;
-            // боёв не больше дней — каждому свой день
-            if (totalDaysC >= totalFights) return fn;
-            // Равномерно, со сдвигом нагрузки к середине: бой fn → день round(fn * days / fights),
-            // чтобы пары 1-го раунда НЕ сваливались все в первый день.
-            // Пример (5 бойцов / 3 дня): fn1->Д1, fn2->Д2, fn3->Д2, fn4->Д3  =>  1-2-1.
-            return Math.min(totalDaysC, Math.max(1, Math.round(fn * totalDaysC / totalFights)));
+            return Math.ceil(fn / 3);
         };
         const result = {};
         for (const slotIdx in firstFight) {
@@ -2567,14 +2749,33 @@ setupExport() {
         const results = document.getElementById('lottery-results');
         if (!results) return;
         const tournamentId = tournament.id;
+        // Запоминаем активный турнир для кнопки «Состав пар» на панели
+        this._tid = tournamentId;
         const athleteCount = Object.values(lotteryResults).reduce((s, arr) => s + arr.length, 0);
 
+        // Без дублирующего названия турнира: оно уже выбрано в селекторе на панели.
         container.innerHTML = `
-            <div class="info" style="margin:15px 0;">
-                <strong>${this.escapeHtml(tournament.name)}</strong> — ${athleteCount} спортсменов распределено по ${Object.keys(lotteryResults).length} категориям
-                <button class="btn-secondary" onclick="App.refreshLottery(${tournamentId})" style="margin-left:10px;">🔄 Перемешать</button>
+            <div class="info" style="margin:8px 0;">
+                ${athleteCount} спортсменов распределено по ${Object.keys(lotteryResults).length} категориям
             </div>
         `;
+
+        // Показываем на панели кнопки «Сохранить жеребьевку», «Состав пар» и разделение по полу
+        const saveBtn = document.getElementById('save-lottery-btn');
+        const pairsBtn = document.getElementById('pairs-download-btn');
+        const grsoBtn = document.getElementById('grso-download-btn');
+        const genderFilter = document.getElementById('lottery-gender-filter');
+        if (saveBtn) saveBtn.style.display = '';
+        if (pairsBtn) {
+            pairsBtn.style.display = '';
+            pairsBtn.onclick = () => this.downloadPairs(tournamentId,
+                tournament.days, tournament.date_from, tournament.date_to);
+        }
+        if (grsoBtn) {
+            grsoBtn.style.display = '';
+            grsoBtn.onclick = () => this.downloadGrso(tournamentId);
+        }
+        if (genderFilter) genderFilter.style.display = 'flex';
 
         // Количество дней из разницы дат турнира (просто отображаем как надпись)
         let daysCount = 1;
@@ -2588,7 +2789,7 @@ setupExport() {
         this._ltLottery = lotteryResults;
         this._ltDays = daysCount;
 
-        // Рендерим панель пола + список категорий (панель встроена в _lotteryHtml)
+        // Рендерим список категорий с учётом фильтра по полу
         this.setLotteryGender(this._lotteryGender || '');
     },
 
@@ -2596,14 +2797,9 @@ setupExport() {
        День бойца выводится простой надписью (без выпадающего меню). */
     _lotteryHtml(tournament, lotteryResults, daysCount, genderFilter) {
         const tournamentId = tournament.id;
-        // Панель переключателя пола — всегда вверху списка
-        let html = `
-            <div class="lottery-gender-bar" style="margin:14px 0; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
-                <button class="btn-secondary lottery-gender-tab ${!genderFilter ? 'active' : ''}" data-gender="all" onclick="App.setLotteryGender('')">Все</button>
-                <button class="btn-secondary lottery-gender-tab ${genderFilter === 'мужской' ? 'active' : ''}" data-gender="мужской" onclick="App.setLotteryGender('мужской')">Юноши</button>
-                <button class="btn-secondary lottery-gender-tab ${genderFilter === 'женский' ? 'active' : ''}" data-gender="женский" onclick="App.setLotteryGender('женский')">Девушки</button>
-            </div>
-        `;
+        // Панель переключателя пола вынесена на панель управления (#lottery-gender-filter),
+        // здесь рендерим только сам список категорий.
+        let html = '';
         Object.entries(lotteryResults).forEach(([weightClass, athletes]) => {
             // Определяем пол категории по первому слову названия («мужской …» / «женский …»),
             // нормализуем, чтобы распознавать и «жен», «муж» и т.п.
@@ -2645,11 +2841,7 @@ setupExport() {
                 </table>
             </div>`;
         });
-
-        // Кнопка сохранения жеребьёвки (после ручной правки соперников)
-        html += '<div style="text-align:center; margin-top:20px;">';
-        html += '<button class="btn-primary" onclick="App.saveLotteryFromUI()" style="font-size:1.1em; padding:12px 30px;">💾 Сохранить жеребьевку</button>';
-        html += '</div>';
+        // Кнопка сохранения теперь на панели управления (#save-lottery-btn)
         return html;
     },
 
@@ -2660,9 +2852,13 @@ setupExport() {
         if (results && this._ltTournament && this._ltLottery) {
             const daysCount = this._ltDays || 1;
             results.innerHTML = this._lotteryHtml(this._ltTournament, this._ltLottery, daysCount, g);
-            results.querySelectorAll('.lottery-gender-tab').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.gender === (g || 'all'));
-            });
+            // Подсветка кнопок пола на панели управления (#lottery-gender-filter)
+            const filter = document.getElementById('lottery-gender-filter');
+            if (filter) {
+                filter.querySelectorAll('.lottery-gender-tab').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.gender === (g || 'all'));
+                });
+            }
         }
     },
 
@@ -3169,6 +3365,24 @@ setupExport() {
                     }
                 });
 
+                // Перерисовка сетки при изменении фильтров (пол / весовая категория)
+                const fg = document.getElementById('bracket-filter-gender');
+                const fw = document.getElementById('bracket-filter-weight');
+                const applyFilters = async () => {
+                    const id = parseInt(select.value);
+                    if (!id) return;
+                    const tournament = await API.getTournament(id);
+                    await this.renderBracket(tournament);
+                };
+                if (fg && !fg.dataset.initialized) {
+                    fg.dataset.initialized = 'true';
+                    fg.addEventListener('change', applyFilters);
+                }
+                if (fw && !fw.dataset.initialized) {
+                    fw.dataset.initialized = 'true';
+                    fw.addEventListener('change', applyFilters);
+                }
+
                 // Кнопка "Сформировать сетку"
                 const generateBtn = document.getElementById('generate-bracket');
                 if (generateBtn) {
@@ -3273,6 +3487,33 @@ setupExport() {
                 return weightA - weightB;
             });
 
+            // Фильтры по полу и весовой категории (два выпадающих меню)
+            const filterGender = document.getElementById('bracket-filter-gender')?.value || '';
+            const filterWeight = document.getElementById('bracket-filter-weight')?.value || '';
+
+            // Заполняем выпадающий список весовых категорий (один раз на рендер проверки актуальности)
+            const weightFilterSel = document.getElementById('bracket-filter-weight');
+            if (weightFilterSel) {
+                const currentW = weightFilterSel.value || '';
+                const gendersWant = filterGender || null;
+                const opts = ['<option value="">Все весовые категории</option>'];
+                sortedWeightClasses.forEach(wc => {
+                    if (gendersWant && wc.split(' ')[0] !== gendersWant) return;
+                    opts.push(`<option value="${this.escapeHtml(wc)}">${this.escapeHtml(wc)}</option>`);
+                });
+                weightFilterSel.innerHTML = opts.join('');
+                if (currentW && weightFilterSel.querySelector(`option[value="${CSS.escape ? CSS.escape(currentW) : currentW.replace(/"/g, '\\"')}"]`)) {
+                    weightFilterSel.value = currentW;
+                }
+            }
+
+            // Применяем фильтры к списку категорий
+            const filteredWeightClasses = sortedWeightClasses.filter(wc => {
+                if (filterGender && wc.split(' ')[0] !== filterGender) return false;
+                if (filterWeight && wc !== filterWeight) return false;
+                return true;
+            });
+
 // === Сборка сетки с разбивкой по дням турнира ===
             const daysMap = {};        // день -> { cat: { весовая категория -> { slotCount, cols } } }
             const championByWc = {};   // весовая категория -> чемпион (null/объект)
@@ -3283,8 +3524,8 @@ setupExport() {
                 const diff = (new Date(tournament.date_to) - new Date(tournament.date_from)) / 86400000;
                 if (isFinite(diff) && diff >= 0) daysFromDates = Math.floor(diff) + 1;
             }
-            const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.days) || 1));
-            for (const weightClass of sortedWeightClasses) {
+const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.days) || 1));
+            for (const weightClass of filteredWeightClasses) {
                 // Сортируем бойцов по слоту (slot из жеребьевки).
                 // Источник истины — жеребьёвка (БД): здесь уже сохранены и порядок слотов,
                 // и день каждого бойца. Сетка только ОТОБРАЖАЕТ эти данные и не пересчитывает
@@ -3493,11 +3734,15 @@ setupExport() {
                         daysMap[centerDay].cat[weightClass].cols[colKey] += `
                             <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${centerDay}">
                                 <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
+                                    ${a1.slot != null ? `<span class="fighter-num">№${a1.slot}</span>` : ''}
+                                    ${a1.athlete_id != null ? `<span class="fighter-id">id ${a1.athlete_id}</span>` : ''}
                                     <span class="fighter-name">${this.escapeHtml(a1.name)}${a1.weight ? ` (${a1.weight} кг)` : ''}</span>
                                     ${savedWinner === a1.athlete_id ? '<span class="crown">👑</span>' : ''}
                                     ${roundNum === 1 && a1.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a1.slot}, ${a1.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
                                 </div>
                                 <div class="fighter-row ${a2Class}" data-slot="${a2 !== null && a2.slot != null ? a2.slot : ''}">
+                                    ${a2 !== null && a2.slot != null ? `<span class="fighter-num">№${a2.slot}</span>` : ''}
+                                    ${a2 !== null && a2.athlete_id != null ? `<span class="fighter-id">id ${a2.athlete_id}</span>` : ''}
                                     <span class="fighter-name">${a2 === null ? 'BYE' : this.escapeHtml(a2.name) + (a2.weight ? ` (${a2.weight} кг)` : '')}</span>
                                     ${a2 !== null && savedWinner === a2.athlete_id ? '<span class="crown">👑</span>' : ''}
                                     ${a2 !== null && roundNum === 1 && a2.slot != null ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${a2.slot}, ${a2.athlete_id})" title="Заменить спортсмена">✏️</button>` : ''}
@@ -3600,10 +3845,23 @@ setupExport() {
                 }
             }
 
-            let html = '<div class="bracket-days">';
-            html += '<div class="day-tabs">' + orderedDays.map((d, i) =>
-                `<button class="day-tab${i === 0 ? ' active' : ''}" data-day="${d}">День ${d}</button>`
-            ).join('') + '</div>';
+            // Кнопки выбора дней выводим на панель управления (#bracket-day-tabs),
+            // а в #bracket-container — только сами панели дней.
+            const dayTabsEl = document.getElementById('bracket-day-tabs');
+            let activeDay = null;
+            if (dayTabsEl) {
+                activeDay = dayTabsEl.querySelector('.day-tab.active')?.dataset.day || null;
+                dayTabsEl.innerHTML = orderedDays.map((d, i) =>
+                    `<button class="btn-secondary day-tab${i === 0 && !activeDay ? ' active' : ''}" data-day="${d}">День ${d}</button>`
+                ).join('');
+                dayTabsEl.style.display = 'flex';
+                // Восстанавливаем ранее выбранный день, если он ещё актуален
+                if (activeDay) {
+                    dayTabsEl.querySelectorAll('.day-tab').forEach(t =>
+                        t.classList.toggle('active', t.dataset.day === activeDay));
+                }
+                activeDay = dayTabsEl.querySelector('.day-tab.active')?.dataset.day || String(orderedDays[0]);
+            }
 
             let panels = '';
             orderedDays.forEach((d, i) => {
@@ -3638,20 +3896,20 @@ setupExport() {
                     catBody += '</div>';
                     body += catBody;
                 });
-                panels += `<div class="day-panel${i === 0 ? ' active' : ''}" data-day="${d}">${body}</div>`;
+                const isActive = String(d) === (activeDay || String(orderedDays[0]));
+                panels += `<div class="day-panel${isActive ? ' active' : ''}" data-day="${d}">${body}</div>`;
             });
 
-            html += panels + '</div>';
-            container.innerHTML = html;
+            container.innerHTML = '<div class="bracket-days">' + panels + '</div>';
 
-            // Обработчик переключения вкладок дней
-            if (!container.dataset.dayHandler) {
-                container.dataset.dayHandler = 'true';
-                container.addEventListener('click', (e) => {
+            // Обработчик переключения вкладок дней (кнопки на панели #bracket-day-tabs)
+            if (dayTabsEl && !this._bracketDayHandler) {
+                this._bracketDayHandler = true;
+                dayTabsEl.addEventListener('click', (e) => {
                     const tab = e.target.closest('.day-tab');
                     if (!tab) return;
                     const d = tab.dataset.day;
-                    container.querySelectorAll('.day-tab').forEach(t => t.classList.toggle('active', t === tab));
+                    dayTabsEl.querySelectorAll('.day-tab').forEach(t => t.classList.toggle('active', t === tab));
                     container.querySelectorAll('.day-panel').forEach(p => p.classList.toggle('active', p.dataset.day === d));
                 });
             }
