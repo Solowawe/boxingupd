@@ -3123,6 +3123,55 @@ setupExport() {
                     name: (athletesAll.find(x => x.id === newId) || {}).name || ''
                 });
 
+                // Пересчитываем ДНИ всей категории заново (вариант A: соперник добавляется
+                // новым слотом, пары снова выстраиваются последовательно 1-2,3-4,...),
+                // чтобы «осиротевший» нечётный бай не оставался в старой позиции.
+                // Порядок слотов при этом НЕ сортируем по весу — сохраняем текущий порядок,
+                // перенумеровываем и считаем дни по методу «3 боя в день».
+                try {
+                    const tinfo = await API.getTournament(parseInt(tournamentId));
+                    const daysFromDates = (tinfo.date_from && tinfo.date_to)
+                        ? Math.floor((new Date(tinfo.date_to) - new Date(tinfo.date_from)) / 86400000) + 1 : 1;
+                    const totalDays = Math.max(daysFromDates, Math.max(1, parseInt(tinfo.days) || 1));
+                    // Упорядочиваем по текущему slot (порядок жеребьёвки), перенумеровываем 1..N
+                    const bySlot = arr.slice().sort((a, b) => (a.slot || 0) - (b.slot || 0));
+                    // Моделируем сетку, считая порядковые номера боёв (как _autoAssignDayByRound)
+                    const alive = bySlot.map((x, i) => i);
+                    const firstFight = {};
+                    let fightNum = 0;
+                    let cur = alive.slice();
+                    while (cur.length > 0) {
+                        const nxt = [];
+                        let i = 0;
+                        for (; i + 1 < cur.length; i += 2) {
+                            fightNum++;
+                            if (!(cur[i] in firstFight)) firstFight[cur[i]] = fightNum;
+                            if (!(cur[i + 1] in firstFight)) firstFight[cur[i + 1]] = fightNum;
+                            nxt.push(cur[i]);
+                        }
+                        if (i < cur.length) {
+                            const lastIdx = cur[i];
+                            if (!(lastIdx in firstFight)) firstFight[lastIdx] = fightNum + 1;
+                            nxt.push(lastIdx);
+                        }
+                        cur = nxt;
+                        if (cur.length <= 1) break;
+                    }
+                    const dayForFight = (fn) => (fn <= 0) ? 1 : Math.ceil(fn / 3);
+                    const newSlots = bySlot.map((x, i) => ({
+                        athlete_id: x.athlete_id,
+                        slot: i + 1,
+                        day: dayForFight(firstFight[i] || 1),
+                        name: x.name,
+                        weight: x.weight,
+                        gender: x.gender,
+                        birth_year: x.birth_year
+                    }));
+                    lottery[weightClass] = newSlots;
+                } catch (e) {
+                    console.error('Ошибка пересчёта дней категории после добавления соперника:', e);
+                }
+
                 // Сохраняем ВСЮ жеребьёвку целиком (с сохранением дней)
                 const payload = {};
                 for (const [wc, list] of Object.entries(lottery)) {
@@ -3731,6 +3780,11 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
                             daysMap[centerDay].cat[weightClass].cols[colKey] = `<div class="bracket-round-col" data-day="${centerDay}">
                                 <div class="round-label"><span class="day-tag">День ${centerDay}</span> ${roundName}</div>`;
                         }
+                        // Нечётный боец (a2===null) не проводит «свой» бой — он автоматически
+                        // продвигается и появится в реальной паре следующего раунда (против
+                        // победителя первой пары). Поэтому отдельный слот-«бай» с надписью BYE/авто
+                        // НЕ рисуем, чтобы не плодить в сетке лишнюю/осиротевшую ячейку.
+                        if (a2 === null) return;
                         daysMap[centerDay].cat[weightClass].cols[colKey] += `
                             <div class="bracket-fight" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${centerDay}">
                                 <div class="fighter-row ${a1Class}" data-slot="${a1.slot != null ? a1.slot : ''}">
