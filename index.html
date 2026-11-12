@@ -21,6 +21,8 @@
                 <button class="nav-btn" data-tab="results">Результаты</button>
             </nav>
             <div style="margin-top:10px;">
+                <button class="btn-secondary" onclick="document.getElementById('local-update-file').click()" title="Обновить приложение из локального update-package.zip">📦 Обновить из файла</button>
+                <input type="file" id="local-update-file" accept=".zip" style="display:none;">
                 <button class="btn-secondary" onclick="App.checkUpdates()" title="Проверить наличие новых версий приложения в GitHub">🔄 Проверить обновления</button>
                 <button class="btn-secondary" onclick="App.openLicense()" title="Лицензионное соглашение">📜 Лицензия</button>
                 <button class="btn-secondary" onclick="App.openTerms()" title="Пользовательское соглашение">⚖️ Пользовательское соглашение</button>

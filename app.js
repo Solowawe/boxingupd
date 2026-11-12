@@ -138,7 +138,68 @@ const App = {
     editAthleteId: null,
     athletesCache: [],
 
-    // ==================== УПРАВЛЕНИЕ СОРЕВНОВАНИЕМ ПО УМОЛЧАНИЮ ====================
+    // ===== СОХРАНЕНИЕ ОТБОРОВ НА ВРЕМЯ СЕАНСА (sessionStorage) =====
+    // Значения выбранных турниров, фильтров, поиска и активного дня хранятся в
+    // sessionStorage, чтобы не сбрасываться при переключении вкладок в рамках
+    // одного сеанса работы (закрытие окна очищает их).
+
+    _ssKeys: ['weighin-tournament-select', 'weighin-search', 'weighin-gender-filter',
+        'participant-tournament-select', 'athlete-tournament-select',
+        'lottery-tournament-select', 'results-tournament-select',
+        'bracket-tournament-select', 'bracket-filter-gender', 'bracket-filter-weight',
+        'participants-search', 'bracket-day-tabs'],
+
+    _sessionSave(key, val) {
+        try {
+            sessionStorage.setItem('app_sel_' + key, typeof val === 'string' ? val : JSON.stringify(val));
+        } catch (e) { /* ignore */ }
+    },
+
+    _sessionGet(key) {
+        try {
+            return sessionStorage.getItem('app_sel_' + key);
+        } catch (e) { return null; }
+    },
+
+    _sessionSpread() {
+        // Собираем значения выбранных турниров/фильтров в объекты, разложенные по разделам,
+        // для восстановления в render-функциях.
+        const out = {};
+        for (const k of ['weighin-tournament-select', 'participant-tournament-select',
+            'lottery-tournament-select', 'results-tournament-select', 'bracket-tournament-select']) {
+            const el = document.getElementById(k);
+            if (el) out[k] = el && el.value;
+        }
+        for (const k of ['weighin-search', 'weighin-gender-filter', 'participants-search',
+            'bracket-filter-gender', 'bracket-filter-weight']) {
+            const el = document.getElementById(k);
+            if (el) out[k] = el ? el.value : '';
+        }
+        const dtab = document.querySelector('#bracket-day-tabs .day-tab.active');
+        if (dtab) out['bracket-day-tabs'] = dtab.dataset.day;
+        return out;
+    },
+
+    // Вешает сохранение состояния на элементы (общий обработчик)
+    bindSessionPersist() {
+        if (this._ssBound) return;
+        this._ssBound = true;
+        const save = () => {
+            const spread = this._sessionSpread();
+            for (const k in spread) this._sessionSave(k, spread[k]);
+        };
+        document.addEventListener('change', (e) => {
+            if (e.target && e.target.id && this._ssKeys.includes(e.target.id)) save();
+        });
+        document.addEventListener('input', (e) => {
+            if (e.target && e.target.id && this._ssKeys.includes(e.target.id)) save();
+        });
+        // Ловим клик по кнопкам-дням сетки (они не вызывают change)
+        const dayTabs = document.getElementById('bracket-day-tabs');
+        if (dayTabs) dayTabs.addEventListener('click', () => save());
+    },
+
+    // ==== УПРАВЛЕНИЕ СОРЕВНОВАНИЕМ ПО УМОЛЧАНИЮ =====
 
     saveDefaultTournament(id) {
         if (id) {
@@ -310,6 +371,48 @@ const App = {
         }
     },
 
+    // Обновление из локального update-package.zip (портативная версия, офлайн)
+    setupLocalUpdate() {
+        const input = document.getElementById('local-update-file');
+        if (!input) return;
+        if (input.dataset.bound) return;
+        input.dataset.bound = '1';
+        input.addEventListener('change', async () => {
+            const file = input.files[0];
+            if (!file) return;
+            const statusEl = document.getElementById('update-status');
+            if (statusEl) statusEl.textContent = '⏳ Применение локального обновления…';
+            try {
+                const fd = new FormData();
+                fd.append('file', file);
+                const r = await fetch('/api/update/local', { method: 'POST', body: fd });
+                const data = await r.json();
+                if (!data.ok || data.error) {
+                    if (statusEl) statusEl.textContent = 'Ошибка: ' + (data.error || r.statusText);
+                    toast('Ошибка обновления: ' + (data.error || r.statusText), 'error');
+                    return;
+                }
+                if (data.need_restart && data.restart_script) {
+                    await fetch('/api/update/launch-updater', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ script: data.restart_script })
+                    }).catch(() => {});
+                    if (statusEl) statusEl.textContent = 'Обновление применено. Перезапуск…';
+                    toast('Приложение закрывается и перезапускается для завершения обновления...', 'warning', 8000);
+                } else {
+                    if (statusEl) statusEl.textContent = `Обновлено до ${data.version}`;
+                    toast(`✅ Локальное обновление применено (${data.version}). Обновите страницу (F5).`, 'success', 6000);
+                }
+            } catch (e) {
+                if (statusEl) statusEl.textContent = 'Ошибка: ' + e.message;
+                toast('Ошибка обновления: ' + e.message, 'error');
+            } finally {
+                input.value = '';
+            }
+        });
+    },
+
     // Предпросмотр отчёта — открывается во вкладке браузера сразу в формате .docx
     openReportPreview(tournamentId) {
         window.open(`/api/report/${tournamentId}`, '_blank');
@@ -447,6 +550,7 @@ async openAbout() {
 
     async init() {
         this.setupTabs();
+        this.bindSessionPersist();
         // Плавающая шапка: чекбокс «Закрепить шапку» (состояние хранится на сервере/в данных)
         const floatingHeader = document.getElementById('floating-header');
         const appHeaderEl = document.querySelector('header');
@@ -516,6 +620,7 @@ async openAbout() {
         this.setupWordImport();
         this.setupAthletesImport();
         this.setupTournamentImport();
+        this.setupLocalUpdate();
         this.setupExport();
         this.setupTournamentForm();
         this.setupParticipantForm();
@@ -900,7 +1005,10 @@ async openAbout() {
                 });
 
                 // Загружаем сохраненное соревнование по умолчанию
-                const defaultId = this.getDefaultTournamentId();
+                let defaultId = this.getDefaultTournamentId();
+                // Приоритет — выбор в рамках текущего сеанса
+                const sessId = this._sessionGet('participant-tournament-select');
+                if (sessId) defaultId = sessId;
                 if (defaultId) {
                     const opt = select.querySelector(`option[value="${defaultId}"]`);
                     if (opt) opt.selected = true;
@@ -1963,10 +2071,22 @@ setupExport() {
                 });
 
                 // Загружаем сохраненное соревнование по умолчанию
-                const defaultId = this.getDefaultTournamentId();
+                let defaultId = this.getDefaultTournamentId();
+                // Приоритет — выбор в рамках текущего сеанса
+                const sessId = this._sessionGet('weighin-tournament-select');
+                if (sessId) defaultId = sessId;
                 if (defaultId) {
                     const opt = select.querySelector(`option[value="${defaultId}"]`);
                     if (opt) opt.selected = true;
+                }
+                // Восстанавливаем поиск и фильтр пола из сеанса
+                if (searchInput) {
+                    const ss = this._sessionGet('weighin-search');
+                    if (ss != null && ss !== 'null') searchInput.value = ss;
+                }
+                if (genderFilter) {
+                    const sg = this._sessionGet('weighin-gender-filter');
+                    if (sg && sg !== 'null') genderFilter.value = sg;
                 }
             } catch (err) {
                 console.error('Ошибка загрузки соревнований:', err);
@@ -2531,7 +2651,10 @@ setupExport() {
                 });
 
                 // Загружаем сохраненное соревнование по умолчанию
-                const defaultId = this.getDefaultTournamentId();
+                let defaultId = this.getDefaultTournamentId();
+                // Приоритет — выбор в рамках текущего сеанса
+                const sessId = this._sessionGet('lottery-tournament-select');
+                if (sessId) defaultId = sessId;
                 if (defaultId) {
                     const opt = select.querySelector(`option[value="${defaultId}"]`);
                     if (opt) opt.selected = true;
@@ -3364,7 +3487,10 @@ setupExport() {
 
             // Загружаем сохраненное соревнование по умолчанию
             let defaultId = this.getDefaultTournamentId();
-            
+            // Приоритет — выбор в рамках текущего сеанса (не сбрасывается при переключении вкладок)
+            const sessId = this._sessionGet('bracket-tournament-select');
+            if (sessId) defaultId = sessId;
+
             // Если defaultId не установлен, но есть турниры - выбираем первый
             if (!defaultId && tournaments.length > 0) {
                 defaultId = tournaments[0].id.toString();
@@ -3537,8 +3663,19 @@ setupExport() {
             });
 
             // Фильтры по полу и весовой категории (два выпадающих меню)
-            const filterGender = document.getElementById('bracket-filter-gender')?.value || '';
-            const filterWeight = document.getElementById('bracket-filter-weight')?.value || '';
+            const fgEl = document.getElementById('bracket-filter-gender');
+            const fwEl = document.getElementById('bracket-filter-weight');
+            // Восстанавливаем выбор фильтров из текущего сеанса
+            if (fgEl) {
+                const sg = this._sessionGet('bracket-filter-gender');
+                if (sg && sg !== 'null') fgEl.value = sg;
+            }
+            if (fwEl) {
+                const sw = this._sessionGet('bracket-filter-weight');
+                if (sw && sw !== 'null') fwEl.value = sw;
+            }
+            const filterGender = fgEl ? (fgEl.value || '') : '';
+            const filterWeight = fwEl ? (fwEl.value || '') : '';
 
             // Заполняем выпадающий список весовых категорий (один раз на рендер проверки актуальности)
             const weightFilterSel = document.getElementById('bracket-filter-weight');
@@ -3904,7 +4041,8 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
             const dayTabsEl = document.getElementById('bracket-day-tabs');
             let activeDay = null;
             if (dayTabsEl) {
-                activeDay = dayTabsEl.querySelector('.day-tab.active')?.dataset.day || null;
+                activeDay = dayTabsEl.querySelector('.day-tab.active')?.dataset.day ||
+                            this._sessionGet('bracket-day-tabs') || null;
                 dayTabsEl.innerHTML = orderedDays.map((d, i) =>
                     `<button class="btn-secondary day-tab${i === 0 && !activeDay ? ' active' : ''}" data-day="${d}">День ${d}</button>`
                 ).join('');
@@ -4452,7 +4590,10 @@ async advanceWinner(tournamentId, fight, winnerId) {
             });
 
             // Загружаем сохраненное соревнование по умолчанию
-            const defaultId = this.getDefaultTournamentId();
+            let defaultId = this.getDefaultTournamentId();
+            // Приоритет — выбор в рамках текущего сеанса
+            const sessId = this._sessionGet('results-tournament-select');
+            if (sessId) defaultId = sessId;
             if (defaultId) {
                 const opt = select.querySelector(`option[value="${defaultId}"]`);
                 if (opt) opt.selected = true;

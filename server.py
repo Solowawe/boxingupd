@@ -2053,6 +2053,143 @@ def update_launch_updater():
 
 
 
+# ======================== ЛОКАЛЬНОЕ ОБНОВЛЕНИЕ ИЗ update-package.zip ========================
+
+@app.route('/api/update/local', methods=['POST'])
+def update_local():
+    """Применить локальный пакет обновления (update-package.zip), выбранный пользователем.
+
+    Метод: multipart/form-data, поле file = .zip.
+    Внутри архива должен лежать update-manifest.json с полями version и files.
+    Файлы распаковываются в каталог данных/ассетов (портативная версия -> рядом с exe),
+    список разрешённых файлов — UPDATE_ALLOWED. Если в пакете есть boxingapp.exe —
+    готовится скрипт-обновлятель (как при онлайн-обновлении) и запрашивается перезапуск.
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'Не передан файл обновления'}), 400
+    f = request.files['file']
+    if not f or not f.filename:
+        return jsonify({'error': 'Файл пуст'}), 400
+
+    try:
+        file_bytes = f.read()
+    except Exception as e:
+        return jsonify({'error': f'Не удалось прочитать файл: {e}'}), 400
+
+    import zipfile
+    from io import BytesIO
+
+    # 1) Читаем манифест из архива (без извлечения содержимого сразу, чтобы проверить версию)
+    manifest = None
+    try:
+        with zipfile.ZipFile(BytesIO(file_bytes)) as z:
+            names = z.namelist()
+            # Нормализуем имена: ищем update-manifest.json в корне
+            mn = next((n for n in names if n.replace('\\', '/').endswith('update-manifest.json')), None)
+            if not mn:
+                return jsonify({'error': 'В архиве нет update-manifest.json'}), 400
+            manifest = json.loads(z.read(mn).decode('utf-8-sig'))
+    except Exception as e:
+        return jsonify({'error': f'Не удалось прочитать манифест из архива: {e}'}), 400
+
+    if not isinstance(manifest, dict) or not manifest.get('version'):
+        return jsonify({'error': 'Некорректный манифест: отсутствует version'}), 400
+
+    version = str(manifest.get('version', ''))
+    requested = manifest.get('files', []) or []
+
+    app_dir = Path(ASSETS_DIR)
+    updated = []
+    skipped = []
+    need_restart = False
+    pending_exe = None
+
+    # 2) Распаковка файлов по манифесту
+    try:
+        with zipfile.ZipFile(BytesIO(file_bytes)) as z:
+            # Находим соответствие имён в манифесте и записей в архиве (по имени файла в конце пути)
+            for rel in requested:
+                name = os.path.basename(str(rel).replace('\\', '/'))
+                if name not in UPDATE_ALLOWED:
+                    skipped.append(name)
+                    continue
+                if name in ('boxing.db',) or name == LOCAL_VERSION_FILE:
+                    skipped.append(name)
+                    continue
+
+                # Ищем запись в архиве по имени файла
+                entry = None
+                for n in z.namelist():
+                    if os.path.basename(n.replace('\\', '/')) == name:
+                        entry = n
+                        break
+                if entry is None:
+                    skipped.append(name)
+                    continue
+
+                content = z.read(entry)
+
+                # Обновление exe — отдельный путь (Windows блокирует работающий exe)
+                if name == 'boxingapp.exe':
+                    exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False) else str(app_dir)
+                    tmp_dir = os.path.join(exe_dir, '__exe_update__')
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    new_exe = os.path.join(tmp_dir, 'boxingapp_new.exe')
+                    with open(new_exe, 'wb') as fw:
+                        fw.write(content)
+                    upd_script = os.path.join(tmp_dir, 'apply_update.bat')
+                    proc_name = 'boxingapp.exe' if getattr(sys, 'frozen', False) else 'python.exe'
+                    bat = (
+                        '@echo off\r\n'
+                        'rem Автообновление BoxingApp (локальный пакет) — не закрывайте это окно.\r\n'
+                        'set "PRNAME=%s"\r\n'
+                        'set "TMPD=%s"\r\n'
+                        'set "EXEDIR=%s"\r\n'
+                        ':wait\r\n'
+                        'tasklist /fi "imagename eq %%PRNAME%%" 2>nul | find /i "%%PRNAME%%" >nul\r\n'
+                        'if errorlevel 1 goto dead\r\n'
+                        'taskkill /im "%%PRNAME%%" /f >nul 2>&1\r\n'
+                        'timeout /t 1 /nobreak >nul\r\n'
+                        'goto wait\r\n'
+                        ':dead\r\n'
+                        'copy /y "%%TMPD%%\\boxingapp_new.exe" "%%EXEDIR%%\\boxingapp.exe" >nul\r\n'
+                        'if errorlevel 1 goto fail\r\n'
+                        'del /q "%%TMPD%%\\boxingapp_new.exe" >nul 2>&1\r\n'
+                        'del /q "%%TMPD%%\\apply_update.bat" >nul 2>&1\r\n'
+                        'cd /d "%%EXEDIR%%"\r\n'
+                        'start "" "%%EXEDIR%%\\boxingapp.exe"\r\n'
+                        'exit\r\n'
+                        ':fail\r\n'
+                        'echo Ошибка: не удалось обновить исполняемый файл.\r\n'
+                        'pause\r\n'
+                    ) % (proc_name, tmp_dir, exe_dir)
+                    with open(upd_script, 'w', encoding='utf-8', errors='replace') as fw:
+                        fw.write(bat)
+                    updated.append(name)
+                    need_restart = True
+                    pending_exe = upd_script
+                    continue
+
+                # Обычные файлы — пишем напрямую в каталог данных/ассетов
+                target = app_dir / name
+                with open(target, 'wb') as fw:
+                    fw.write(content)
+                updated.append(name)
+    except Exception as e:
+        return jsonify({'error': f'Ошибка применения локального обновления: {e}'}), 500
+
+    _write_local_version(version)
+
+    return jsonify({
+        'ok': True,
+        'version': version,
+        'updated': updated,
+        'skipped': skipped,
+        'need_restart': need_restart,
+        'restart_script': pending_exe
+    })
+
+
 # ======================== API: ИМПОРТ ИЗ WORD (.docx) ========================
 
 def _docx_cell_text(tc, W):
