@@ -524,9 +524,33 @@ td.editable:hover {
 
 .bracket-tree {
     display: flex;
-    gap: 20px;
-    overflow-x: auto;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
     padding: 10px 0;
+}
+
+/* Вариант А: все пары дня одним вертикальным списком, прижатым к левому краю */
+.bracket-day-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: auto;
+    max-width: 100%;
+}
+
+.day-list-title {
+    color: #ffd700;
+    font-weight: 700;
+    font-size: 0.95em;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 215, 0, 0.3);
+    margin-bottom: 4px;
+}
+
+.bracket-day-list .bracket-fight {
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .bracket-round-col {
@@ -684,10 +708,10 @@ td.editable:hover {
 /* Колонки раундов внутри сетки */
 .bracket-tree {
     display: flex;
-    gap: 24px;
-    align-items: flex-start;
-    overflow-x: auto;
-    padding-bottom: 8px;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 0;
 }
 
 .bracket-round-col {
@@ -1017,8 +1041,9 @@ td.editable:hover {
 
 .bracket-tree {
     display: flex;
-    gap: 20px;
-    overflow-x: auto;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
     padding: 10px 0;
 }
 
@@ -1248,7 +1273,7 @@ td.editable:hover {
     min-width: 260px;
     max-width: 320px;
     max-height: 60vh;
-    overflow-y: auto;
+    overflow: hidden;
     background: rgba(22, 24, 44, 0.98);
     border: 1px solid rgba(255, 215, 0, 0.4);
     border-radius: 8px;
@@ -1257,6 +1282,19 @@ td.editable:hover {
     flex-direction: column;
     gap: 4px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+/* Заголовок меню не прокручивается */
+.athlete-picker .method-menu-title {
+    flex-shrink: 0;
+    margin-bottom: 4px;
+}
+/* Контейнер со списком опций получает собственную полосу прокрутки */
+.athlete-picker > div:last-child {
+    max-height: calc(60vh - 44px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 .athlete-picker .method-option {
     text-align: left;
@@ -1479,4 +1517,78 @@ select,
     color-scheme: light;
     color: #1a1a2e;
     background-color: #ffffff;
+}
+
+/* ===== ТУРНИРНАЯ СЕТКА (режим «ёлки» — все дни, линии) ===== */
+.tree-view .tree-scroll {
+    overflow-x: auto;
+}
+.bracket-tree {
+    align-items: flex-start;
+}
+.tree-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 220px;
+    position: relative;
+}
+.tree-col-title {
+    color: #ffd700;
+    font-weight: 700;
+    font-size: 0.85em;
+    text-align: center;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 215, 0, 0.3);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.tree-pair {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 215, 0, 0.2);
+    border-radius: 8px;
+    padding: 8px;
+    position: relative;
+}
+.tree-pair .fighter-row {
+    margin-bottom: 0;
+}
+.tree-pair .fighter-row + .fighter-row {
+    margin-top: 4px;
+}
+.tree-pair .fight-method {
+    margin-top: 4px;
+    font-size: 0.75em;
+    text-align: center;
+}
+.tree-pair .fighter-buttons {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+}
+.tree-pair .fighter-buttons .btn-winner {
+    flex: 1;
+    font-size: 0.75em;
+    padding: 3px 6px;
+}
+/* Линия-соединение от пары к следующему раунду (горизонтальная + вертикальная выноска) */
+.tree-connect {
+    position: absolute;
+    right: -14px;
+    top: 50%;
+    width: 14px;
+    height: 0;
+    border-top: 1px solid rgba(255, 215, 0, 0.5);
+}
+.tree-view .bracket-tree {
+    display: flex;
+    flex-direction: row;
+    gap: 24px;
+    align-items: flex-start;
+    overflow-x: auto;
+    padding: 10px 0;
+}
+.tree-wc {
+    margin-bottom: 32px;
 }
