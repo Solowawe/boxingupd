@@ -1523,8 +1523,10 @@ select,
 .tree-view .tree-scroll {
     overflow-x: auto;
 }
+/* Раньше здесь стояло .bracket-tree { align-items: flex-start; } — это отключало
+   центрирование слотов. Режим «ёлки» скрыт, поэтому возвращаем центрирование. */
 .bracket-tree {
-    align-items: flex-start;
+    align-items: center;
 }
 .tree-col {
     display: flex;

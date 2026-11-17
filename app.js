@@ -3758,17 +3758,28 @@ setupExport() {
                 return true;
             });
 
-            // Режим отображения: 'days' (по дням списком) или 'tree' (турнирная сетка с линиями)
+            // Режим отображения: 'days' (по дням списком) или 'tree' (турнирная сетка с линиями).
+            // По умолчанию — «ёлка» (tree), но сохранённый пользователем выбор в сеансе
+            // имеет приоритет. Выпадающее меню остаётся доступным для переключения.
             const viewModeEl = document.getElementById('bracket-view-mode');
+            let bracketViewMode = (viewModeEl && viewModeEl.value) ? viewModeEl.value : 'days';
             if (viewModeEl) {
                 const svm = this._sessionGet('bracket-view-mode');
-                if (svm && svm !== 'null') viewModeEl.value = svm;
+                if (svm && svm !== 'null') {
+                    viewModeEl.value = svm;
+                    bracketViewMode = svm;
+                } else {
+                    bracketViewMode = 'tree';
+                    viewModeEl.value = 'tree';
+                }
+            } else {
+                bracketViewMode = 'tree';
             }
-            const bracketViewMode = viewModeEl ? (viewModeEl.value || 'days') : 'days';
 
             // === ТУРНИРНАЯ СЕТКА (все дни на одной странице, линии между раундами) ===
             if (bracketViewMode === 'tree') {
                 this._renderBracketTree(container, tournament, lottery, resultsMap, fid, filteredWeightClasses);
+                this._bindBracketActions(container);
                 return;
             }
 
@@ -3783,12 +3794,14 @@ setupExport() {
                 if (isFinite(diff) && diff >= 0) daysFromDates = Math.floor(diff) + 1;
             }
 const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.days) || 1));
-            for (const weightClass of filteredWeightClasses) {
+for (const weightClass of filteredWeightClasses) {
                 // Сортируем бойцов по слоту (slot из жеребьевки).
                 // Источник истины — жеребьёвка (БД): здесь уже сохранены и порядок слотов,
                 // и день каждого бойца. Сетка только ОТОБРАЖАЕТ эти данные и не пересчитывает
                 // пары и дни заново — бойцы привязаны друг к другу только весовой категорией.
                 const slots = [...lottery[weightClass]].sort((a, b) => a.slot - b.slot);
+                // Показываем только фактические боевые категории — не менее 2 бойцов.
+                if (slots.length < 2) continue;
 
                 // Строим раунды: раунд 1 — пары из жеребьевки, далее — победители
                 // rounds = [ [ {a1, a2, pairIndex, result}, ... ], [ ... ], ... ]
@@ -3946,9 +3959,17 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
                         // Колонка (раунд), куда попадает «центр» пары (для блока действий).
                         // В 1-м раунде бой происходит в ПОЗДНИЙ (максимальный) из дней пары —
                         // к этому моменту оба бойца уже доступны (ожидающий ждёт в свой день).
-                        const centerDay = (dayA != null || dayB != null)
-                            ? Math.max(dayA != null ? dayA : dayB, dayB != null ? dayB : dayA)
-                            : this.roundToDay(roundNum, maxRounds, tournamentDays);
+                        // Бай (нечётный боец, a2===null) в 1-м раунде переносится на 2-й день
+                        // соревнований и ждёт там победителя первой пары (Б1-Б2).
+                        // Если турнир однодневный — сжимаем в 1-й день.
+                        let centerDay;
+                        if (roundNum === 1 && f.a2 === null) {
+                            centerDay = Math.min(tournamentDays, 2);
+                        } else if (dayA != null || dayB != null) {
+                            centerDay = Math.max(dayA != null ? dayA : dayB, dayB != null ? dayB : dayA);
+                        } else {
+                            centerDay = this.roundToDay(roundNum, maxRounds, tournamentDays);
+                        }
 
                         // Разрешаем и объекты бойцов, и ID (из победителей предыдущего раунда).
                         // b2b игрок в ещё не заполненной паре (победитель не определён) = null:
@@ -4203,99 +4224,109 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
                 });
             }
 
-            // Обработчик клика по кнопкам победителя (делегирование)
-            if (!container.dataset.winnerHandler) {
-                container.dataset.winnerHandler = 'true';
-                container.addEventListener('click', async (e) => {
-                    const btn = e.target.closest('.btn-winner');
-                    if (!btn) return;
-                    const fightEl = btn.closest('.bracket-fight');
-                    if (!fightEl) return;
-
-                    // Если меню уже открыто в этом бою:
-                    //  - клик по той же кнопке — закрываем меню
-                    //  - клик по другой кнопке — переоткрываем для нового победителя
-                    const existingMenu = fightEl.querySelector('.method-menu');
-                    if (existingMenu) {
-                        const sameButton = existingMenu.dataset.winnerId === btn.dataset.winner;
-                        existingMenu.remove();
-                        if (sameButton) return;
-                    }
-
-                    const winnerId = parseInt(btn.dataset.winner);
-                    const pairIndex = parseInt(fightEl.dataset.pairIndex);
-                    const weightBlock = fightEl.closest('.bracket-weight-class');
-                    const weightClass = weightBlock.querySelector('.weight-title').dataset.weightClass;
-
-                    // Выпадающее меню выбора способа победы
-                    const menu = document.createElement('div');
-                    menu.className = 'method-menu';
-                    menu.dataset.winnerId = btn.dataset.winner;
-                    menu.innerHTML = `<div class="method-menu-title">Способ победы:</div>` +
-                        WIN_METHODS.map(m =>
-                            `<button class="method-option" data-method="${this.escapeHtml(m)}">${this.escapeHtml(m)}</button>`
-                        ).join('');
-                    fightEl.appendChild(menu);
-
-                    menu.addEventListener('click', async (ev) => {
-                        const opt = ev.target.closest('.method-option');
-                        if (!opt) return;
-                        const method = opt.dataset.method;
-                        menu.remove();
-                        try {
-                            const day = parseInt(fightEl.dataset.day) || 1;
-                            await API.saveBracketResult(this.currentBracketTournamentId, weightClass, pairIndex, winnerId, method, day);
-
-                            // Публикация результата: если категория стала полностью решённой
-                            // (чемпион определён) — показываем уведомление и обновляем «Результаты».
-                            const championBefore = new Set(this._publishedChampions || []);
-                            // Сохраняем активный день, чтобы не сбрасывался на первый после перерисовки
-                            const keepDay = container.querySelector('.day-tab.active')?.dataset.day;
-                            const tournament = await API.getTournament(this.currentBracketTournamentId);
-                            await this.renderBracket(tournament);
-                            if (keepDay) {
-                                container.querySelectorAll('.day-tab').forEach(t =>
-                                    t.classList.toggle('active', String(t.dataset.day) === String(keepDay)));
-                                container.querySelectorAll('.day-panel').forEach(p =>
-                                    p.classList.toggle('active', String(p.dataset.day) === String(keepDay)));
-                            }
-                            const championsNow = [...document.querySelectorAll('.weight-championship .wt-champ-name')]
-                                .map(n => n.textContent.trim());
-                            const newChampions = championsNow.filter(c => !championBefore.has(c));
-                            this._publishedChampions = championsNow;
-                            if (newChampions.length > 0) {
-                                toast('🏆 Категория завершена! Победитель опубликован в результатах: ' + newChampions[0], 'success', 5000);
-                                const resultsTab = document.getElementById('tab-results');
-                                if (resultsTab) {
-                                    const rs = document.getElementById('results-tournament-select');
-                                    if (rs && String(rs.value) === String(this.currentBracketTournamentId)) {
-                                        await this.renderResults(tournament);
-                                    }
-                                }
-                            }
-                        } catch (err) {
-                            toast('Ошибка сохранения победителя: ' + err.message);
-                        }
-                    });
-                });
-
-                // Клик вне меню (и вне кнопок победителя) закрывает все открытые меню
-                document.addEventListener('click', (e) => {
-                    if (e.target.closest('.method-menu') || e.target.closest('.btn-winner')) return;
-                    document.querySelectorAll('.method-menu').forEach(m => m.remove());
-                });
-
-                // Esc закрывает все открытые меню
-                document.addEventListener('keydown', (e) => {
-                    if (e.key === 'Escape') {
-                        document.querySelectorAll('.method-menu').forEach(m => m.remove());
-                    }
-                });
-            }
+            // Общие обработчики сетки (выбор победителя, меню способа, закрытие вне/Esc)
+            // — работают и в режиме «по дням», и в «ёлке».
+            this._bindBracketActions(container);
         } catch (err) {
             console.error('Ошибка рендеринга сетки:', err);
             container.innerHTML = `<div class="empty-state"><p>Ошибка: ${err.message}</p></div>`;
         }
+    },
+
+    // Привязывает общие обработчики сетки, которые работают В ОБОИХ режимах:
+    // «по дням» (кнопки в .bracket-fight) и «ёлка» (кнопки в .tree-pair).
+    // Выбор победителя, выпадающее меню способа победы, закрытие по клику вне и Esc.
+    _bindBracketActions(container) {
+        if (!container || container.dataset.winnerHandler) return;
+        container.dataset.winnerHandler = 'true';
+        const WIN_METHODS = ['Нокаут', 'Технический нокаут', 'Единогласно', 'Раздельное решение', 'По очкам', 'Дисквалификация', 'Отказ от боя', 'Травма'];
+
+        container.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.btn-winner');
+            if (!btn) return;
+            // В режиме «по дням» кнопки лежат в .bracket-fight, в режиме «ёлки» — в .tree-pair
+            const fightEl = btn.closest('.bracket-fight') || btn.closest('.tree-pair');
+            if (!fightEl) return;
+
+            // Если меню уже открыто в этом бою:
+            //  - клик по той же кнопке — закрываем меню
+            //  - клик по другой кнопке — переоткрываем для нового победителя
+            const existingMenu = fightEl.querySelector('.method-menu');
+            if (existingMenu) {
+                const sameButton = existingMenu.dataset.winnerId === btn.dataset.winner;
+                existingMenu.remove();
+                if (sameButton) return;
+            }
+
+            const winnerId = parseInt(btn.dataset.winner);
+            const pairIndex = parseInt(fightEl.dataset.pairIndex);
+            const weightBlock = fightEl.closest('.bracket-weight-class');
+            const weightClass = weightBlock.querySelector('.weight-title').dataset.weightClass;
+
+            // Выпадающее меню выбора способа победы
+            const menu = document.createElement('div');
+            menu.className = 'method-menu';
+            menu.dataset.winnerId = btn.dataset.winner;
+            menu.innerHTML = `<div class="method-menu-title">Способ победы:</div>` +
+                WIN_METHODS.map(m =>
+                    `<button class="method-option" data-method="${this.escapeHtml(m)}">${this.escapeHtml(m)}</button>`
+                ).join('');
+            fightEl.appendChild(menu);
+
+            menu.addEventListener('click', async (ev) => {
+                const opt = ev.target.closest('.method-option');
+                if (!opt) return;
+                const method = opt.dataset.method;
+                menu.remove();
+                try {
+                    const day = parseInt(fightEl.dataset.day) || 1;
+                    await API.saveBracketResult(this.currentBracketTournamentId, weightClass, pairIndex, winnerId, method, day);
+
+                    // Публикация результата: если категория стала полностью решённой
+                    // (чемпион определён) — показываем уведомление и обновляем «Результаты».
+                    const championBefore = new Set(this._publishedChampions || []);
+                    // Сохраняем активный день, чтобы не сбрасывался на первый после перерисовки
+                    const keepDay = container.querySelector('.day-tab.active')?.dataset.day;
+                    const tournament = await API.getTournament(this.currentBracketTournamentId);
+                    await this.renderBracket(tournament);
+                    if (keepDay) {
+                        container.querySelectorAll('.day-tab').forEach(t =>
+                            t.classList.toggle('active', String(t.dataset.day) === String(keepDay)));
+                        container.querySelectorAll('.day-panel').forEach(p =>
+                            p.classList.toggle('active', String(p.dataset.day) === String(keepDay)));
+                    }
+                    const championsNow = [...document.querySelectorAll('.weight-championship .wt-champ-name')]
+                        .map(n => n.textContent.trim());
+                    const newChampions = championsNow.filter(c => !championBefore.has(c));
+                    this._publishedChampions = championsNow;
+                    if (newChampions.length > 0) {
+                        toast('🏆 Категория завершена! Победитель опубликован в результатах: ' + newChampions[0], 'success', 5000);
+                        const resultsTab = document.getElementById('tab-results');
+                        if (resultsTab) {
+                            const rs = document.getElementById('results-tournament-select');
+                            if (rs && String(rs.value) === String(this.currentBracketTournamentId)) {
+                                await this.renderResults(tournament);
+                            }
+                        }
+                    }
+                } catch (err) {
+                    toast('Ошибка сохранения победителя: ' + err.message);
+                }
+            });
+        });
+
+        // Клик вне меню (и вне кнопок победителя) закрывает все открытые меню
+        document.addEventListener('click', (e) => {
+            if (e.target.closest('.method-menu') || e.target.closest('.btn-winner')) return;
+            document.querySelectorAll('.method-menu').forEach(m => m.remove());
+        });
+
+        // Esc закрывает все открытые меню
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.method-menu').forEach(m => m.remove());
+            }
+        });
     },
 
     // ===== ТУРНИРНАЯ СЕТКА (режим «ёлки»): все дни на одной странице, линии между раундами =====
@@ -4306,20 +4337,30 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
         const WIN_METHODS = ['Нокаут', 'Технический нокаут', 'Единогласно', 'Раздельное решение', 'По очкам', 'Дисквалификация', 'Отказ от боя', 'Травма'];
         const tournamentDays = Math.max(1, parseInt(tournament.days) || 1);
 
+        // В режиме «ёлки» дни уже видны в заголовках колонок (День N),
+        // поэтому кнопки выбора дней на панели не нужны — скрываем их.
+        const dayTabsEl = document.getElementById('bracket-day-tabs');
+        if (dayTabsEl) dayTabsEl.style.display = 'none';
+
         // Полезный HTML ячейки игрока (или «ожидает», если null)
-        const playerRow = (p, isTop) => {
+        const playerRow = (p, isTop, rIdx, weightClass) => {
             if (!p) {
                 return `<div class="fighter-row empty"><span class="fighter-name" style="color:rgba(255,255,255,0.4);font-style:italic;">— ожидает —</span></div>`;
             }
             const slot = (p.slot != null) ? p.slot : '';
             const num = p.slot != null ? `<span class="fighter-num">№${p.slot}</span>` : '';
+            // Кнопка замены спортсмена — только в 1-м раунде (реальный слот жеребьёвки),
+            // как и в обычном режиме «по дням».
+            const editBtn = (rIdx === 0 && p.slot != null && p.athlete_id != null)
+                ? `<button class="btn-edit-fighter" onclick="App.editBracketAthlete(${tournament.id}, this, '${this.escapeHtml(weightClass)}', ${p.slot}, ${p.athlete_id})" title="Заменить спортсмена">✏️</button>` : '';
             return `<div class="fighter-row ${isTop ? 'top' : 'bottom'}" data-slot="${slot}">
                 ${num}
                 <span class="fighter-name">${this.escapeHtml(p.name)}${p.weight ? ` (${p.weight} кг)` : ''}</span>
+                ${editBtn}
             </div>`;
         };
         // HTML одной пары с вертикальными линиями к следующему раунду (нижняя линия)
-        const pairHtml = (f, rIdx, roundCount) => {
+        const pairHtml = (f, rIdx, roundCount, weightClass) => {
             const winner = f.result ? f.result.winner_id : null;
             const a1c = winner != null && f.a1 && fid(f.a1) === winner ? 'winner' : (winner != null ? 'loser' : '');
             const a2c = winner != null && f.a2 && f.a2 !== null && fid(f.a2) === winner ? 'winner' : (winner != null ? 'loser' : '');
@@ -4327,7 +4368,7 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
             const a2 = (f.a2 != null) ? ((typeof f.a2 === 'object') ? f.a2 : { athlete_id: f.a2, name: this.getAthleteName(f.a2), weight: '' }) : null;
             // Кнопки выбора победителя
             let buttons = '';
-            if (a2 !== null && !f.result && f.pairIndex !== null) {
+            if (a1 !== null && a2 !== null && !f.result && f.pairIndex !== null) {
                 buttons = `<div class="fighter-buttons">
                     <button class="btn-winner btn-winner-1" data-winner="${fid(a1)}">✓</button>
                     <button class="btn-winner btn-winner-2" data-winner="${fid(a2)}">✓</button>
@@ -4337,8 +4378,8 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
             // Соединительная линия вправо от пары, если есть следующий раунд
             const connector = (rIdx < roundCount - 1) ? '<div class="tree-connect"></div>' : '';
             return `<div class="tree-pair" data-pair-index="${f.pairIndex !== null ? f.pairIndex : ''}" data-day="${f.day != null ? f.day : ''}">
-                <div class="fighter-row ${a1c}">${playerRow(a1, true)}</div>
-                <div class="fighter-row ${a2c}">${playerRow(a2, false)}</div>
+                <div class="fighter-row ${a1c}">${playerRow(a1, true, rIdx, weightClass)}</div>
+                <div class="fighter-row ${a2c}">${playerRow(a2, false, rIdx, weightClass)}</div>
                 ${buttons}
                 ${method}
                 ${connector}
@@ -4350,16 +4391,25 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
         filteredWeightClasses.forEach(wc => {
             const slots = [...(lottery[wc] || [])].sort((a, b) => a.slot - b.slot);
             if (slots.length === 0) return;
+            // Показываем только фактические категории соревнования: в сетке нужны
+            // категории, где реально есть участники для боя (не менее 2 бойцов).
+            // Одиночные слоты (1 боец) в режиме «ёлки» не выводятся — это не боевая категория.
+            if (slots.length < 2) return;
             // Строим пары (текущий алгоритм: статические раунды, дозаполнение победителями)
             const rounds = this._buildTreeRounds(slots, resultsMap, fid, wc);
 
-            // Колонки раундов
+            // Колонки раундов (заголовок — «День N» по фактическому дню пар колонки)
             const colCount = rounds.length;
             const colHtml = rounds.map((roundFights, rIdx) => {
-                const fights = roundFights.map(f => pairHtml(f, rIdx, colCount)).join('');
-                let head = `Раунд ${rIdx + 1}`;
-                // Метка дня берём из карты centreDay (приблизительно по day бойцов)
-                return `<div class="tree-col" data-round="${rIdx + 1}">
+                // Пропускаем одиночный авто-проход бая (a2===null) в 1-м раунде: как и в
+                // режиме по дням, боец без соперника не рисуется отдельной строкой, а виден
+                // только в паре следующего дня (переход в день 2).
+                const treeFights = roundFights.filter(f => !(f.a2 === null && f.result && f.result.method === 'авто'));
+                const fights = treeFights.map(f => pairHtml(f, rIdx, colCount, wc)).join('');
+                // День колонки = день первой пары (все пары одного раунда/дня несут свой day)
+                const dayOfCol = (roundFights[0] && roundFights[0].day) ? roundFights[0].day : (rIdx + 1);
+                const head = `День ${dayOfCol}`;
+                return `<div class="tree-col" data-round="${rIdx + 1}" data-day="${dayOfCol}">
                     <div class="tree-col-title">${head}</div>
                     ${fights}
                 </div>`;
@@ -4389,44 +4439,92 @@ const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.d
         rounds.push(firstRound);
         const byeSlot = (slots.length % 2 !== 0) ? slots[slots.length - 1] : null;
         const totalRounds = Math.max(1, Math.round(Math.log2(slots.length)));
-        let roundNum = 1;
-        while (roundNum < totalRounds) {
-            const prev = rounds[rounds.length - 1];
-            roundNum++;
-            const offset = (roundNum - 1) * 1000;
-            const nextRound = [];
-            const winnerOf = (f) => {
-                if (!f || !f.result || f.result.winner_id == null) return null;
-                const wId = fid(f.result.winner_id);
-                if (f.a1 && fid(f.a1) === wId) return f.a1;
-                if (f.a2 && f.a2 !== null && fid(f.a2) === wId) return f.a2;
-                return null;
-            };
-            if (byeSlot && roundNum === 2) {
-                const byeId = fid(byeSlot);
-                const w1 = winnerOf(prev[0]);
-                const w1NoBye = (w1 && fid(w1) !== byeId) ? w1 : null;
-                let pIdx = offset;
-                if (w1NoBye && prev.length >= 2) {
-                    nextRound.push({ a1: w1NoBye, a2: byeSlot, pairIndex: pIdx, result: resultsMap[`${wc}|${pIdx}`] || null, day: 2 });
-                    pIdx++;
+        const winnerOf = (f) => {
+            if (!f || !f.result || f.result.winner_id == null) return null;
+            const wId = fid(f.result.winner_id);
+            if (f.a1 && fid(f.a1) === wId) return f.a1;
+            if (f.a2 && f.a2 !== null && fid(f.a2) === wId) return f.a2;
+            return null;
+        };
+
+        // Спецслучай: нечётное число бойцов (бай). Схема для 9 и ей подобных.
+        //  День 1: пары (Б1-Б2, Б3-Б4, ...), последний — бай.
+        //  День 2: [поб.первой пары vs бай] -> X; ... [X vs поб.послед.пары].
+        //  Далее — обычные раунды по победителям.
+        if (byeSlot) {
+            const byeId = fid(byeSlot);
+            // День 2 (раунд 2)
+            const day2 = [];
+            const firstPair = firstRound[0];
+            const wFirst = winnerOf(firstPair);
+            const wFirstNoBye = (wFirst && fid(wFirst) !== byeId) ? wFirst : null;
+            // Пара 2A: X = поб.первой пары vs бай
+            day2.push({ a1: wFirstNoBye, a2: byeSlot, pairIndex: 1000, result: resultsMap[`${wc}|1000`] || null, day: 2 });
+            // Остальные победители (prev[1..], кроме бая) попарно в день 2
+            const rest = [];
+            for (let i = 1; i < firstRound.length; i++) { const w = winnerOf(firstRound[i]); if (w && fid(w) !== byeId) rest.push(w); }
+            let si = 0, pIdx = 1001;
+            const centralPairs = [];
+            while (si + 1 < rest.length) {
+                const pair = { a1: rest[si], a2: rest[si + 1], pairIndex: pIdx, result: resultsMap[`${wc}|${pIdx}`] || null, day: 2 };
+                centralPairs.push(pair); day2.push(pair); pIdx++; si += 2;
+            }
+            // Победитель пары 2A (X) и одиночный победитель (Б7 из последней пары):
+            // их бой ДОБАВЛЯЕМ в день 2 — X против победителя последней пары.
+            if (rest.length % 2 !== 0) {
+                const lone = rest[rest.length - 1];
+                const xObj = winnerOf(day2[0]);
+                day2.push({ a1: xObj, a2: lone, pairIndex: pIdx, result: resultsMap[`${wc}|${pIdx}`] || null, day: 2 });
+                // pIdx -> для финального раунда
+            }
+            rounds.push(day2);
+
+            // Дальше — обычные раунды по победителям (3-й и т.д.)
+            // ВАЖНО: пары day2 = [p1000 (Бай: X), p1001 (central), p1002 (X-Б7), ...].
+            // Пара p1000 — это только под-шаг для получения X, она НЕ даёт победителя
+            // в следующий раунд напрямую: X уже участвует в паре X-Б7 (p1002).
+            // Поэтому следующий раунд формируем из пар day2, ИСКЛЮЧАЯ первую (p1000).
+            let roundNum = 3;
+            const nextGen = () => {
+                const prev = rounds[rounds.length - 1];
+                const offset = (roundNum - 1) * 1000;
+                const nextRound = [];
+                let startIdx = 0;
+                // Если есть одиночный победитель (X-ветка), то первая пара p1000 — лишь
+                // под-шаг для получения X; в следующий раунд она НЕ даёт победителя напрямую.
+                if (roundNum === 3 && rest.length % 2 !== 0) {
+                    startIdx = 1;
                 }
-                const rest = [];
-                for (let i = 1; i < prev.length; i++) { const w = winnerOf(prev[i]); if (w && fid(w) !== byeId) rest.push(w); }
-                const pool = w1 ? rest : [{ a1: null }, ...rest];
-                let si = 0;
-                while (si + 1 < pool.length) {
-                    nextRound.push({ a1: pool[si].a1 !== undefined ? pool[si].a1 : pool[si], a2: pool[si + 1].a1 !== undefined ? pool[si + 1].a1 : pool[si + 1], pairIndex: pIdx, result: resultsMap[`${wc}|${pIdx}`] || null, day: 2 });
-                    pIdx++; si += 2;
+                for (let i = startIdx; i + 1 < prev.length; i += 2) {
+                    const pp = offset + (Math.floor((i - startIdx) / 2));
+                    nextRound.push({ a1: winnerOf(prev[i]), a2: winnerOf(prev[i + 1]), pairIndex: pp, result: resultsMap[`${wc}|${pp}`] || null, day: roundNum });
                 }
                 rounds.push(nextRound);
-                continue;
+                roundNum++;
+            };
+            // Продолжаем, пока в последнем раунде больше одной пары (с учётом пропуска p1000)
+            while (true) {
+                const prev = rounds[rounds.length - 1];
+                let cnt = prev.length;
+                if (roundNum === 3 && rest.length % 2 !== 0) cnt -= 1; // p1000 не считается
+                if (cnt <= 1) break;
+                nextGen();
             }
+            return rounds;
+        }
+
+        // Чётное число бойцов: обычные статические раунды
+        let roundNum2 = 2;
+        while (roundNum2 <= totalRounds) {
+            const prev = rounds[rounds.length - 1];
+            const offset = (roundNum2 - 1) * 1000;
+            const nextRound = [];
             for (let i = 0; i + 1 < prev.length; i += 2) {
-                const pIdx = offset + (i / 2);
-                nextRound.push({ a1: winnerOf(prev[i]), a2: winnerOf(prev[i + 1]), pairIndex: pIdx, result: resultsMap[`${wc}|${pIdx}`] || null, day: roundNum });
+                const pp = offset + (i / 2);
+                nextRound.push({ a1: winnerOf(prev[i]), a2: winnerOf(prev[i + 1]), pairIndex: pp, result: resultsMap[`${wc}|${pp}`] || null, day: roundNum2 });
             }
             rounds.push(nextRound);
+            roundNum2++;
         }
         return rounds;
     },
@@ -4922,38 +5020,10 @@ async advanceWinner(tournamentId, fight, winnerId) {
         const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.days) || 1));
 
         // Строит раунды из слотов, как в сетке. Возвращает { rounds, champion, maxRounds }
-        function buildRounds(slots, wc) {
-            const rounds = [];
-            const firstRound = [];
-            let pIdx = 0;
-            for (let i = 0; i < slots.length - 1; i += 2) {
-                firstRound.push({ a1: slots[i], a2: slots[i + 1], pairIndex: pIdx,
-                    result: resultsMap[`${wc}|${pIdx}`] || null });
-                pIdx++;
-            }
-            if (slots.length % 2 !== 0) {
-                firstRound.push({ a1: slots[slots.length - 1], a2: null, pairIndex: null,
-                    result: { winner_id: slots[slots.length - 1].athlete_id, method: 'авто' } });
-            }
-            rounds.push(firstRound);
-
-            let roundNum = 1;
-            while (true) {
-                const prev = rounds[rounds.length - 1];
-                const winners = prev.map(f => f.result ? f.result.winner_id : null);
-                if (winners.some(w => w === null)) break;
-                if (winners.length <= 1) break;
-                roundNum++;
-                const offset = (roundNum - 1) * 1000;
-                const next = [];
-                for (let i = 0; i < winners.length - 1; i += 2) {
-                    const pi = offset + i;
-                    next.push({ a1: winners[i], a2: winners[i + 1], pairIndex: pi,
-                        result: resultsMap[`${wc}|${pi}`] || null });
-                }
-                if (next.length === 0) break;
-                rounds.push(next);
-            }
+        const buildRounds = (slots, wc) => {
+            // Единая логика построения раундов — та же, что в режиме «ёлки»
+            // (корректно обрабатывает бай и схему X-Б7 для нечётного числа бойцов).
+            const rounds = this._buildTreeRounds(slots, resultsMap, fid, wc);
 
             // Чемпион — единственный победитель верхнего раунда, если все пары решены
             let champion = null;
