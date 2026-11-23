@@ -1974,66 +1974,25 @@ def update_apply():
             skipped.append(name)
             continue
 
-        # Обновление самого исполняемого файла (exe) — отдельный путь:
-        # Windows не даёт перезаписать работающий .exe, поэтому новый exe
-        # сохраняем во временную папку и подготавливаем скрипт-обновлятель,
-        # который заменит файл после завершения работы приложения и перезапустит его.
+        # Обновление самого исполняемого файла (exe) — только СКАЧИВАЕМ вручную:
+        # новый exe с версией в имени сохраняется в папку update/ рядом с приложением,
+        # НО НЕ применяется автоматически — пользователь ставит его вручную.
         if name == 'boxingapp.exe':
             need_restart = False
             try:
                 content = _fetch_url(f'{base}/{rel}', timeout=60)
                 exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False) else str(app_dir)
-                tmp_dir = os.path.join(exe_dir, '__exe_update__')
-                os.makedirs(tmp_dir, exist_ok=True)
-                new_exe = os.path.join(tmp_dir, 'boxingapp_new.exe')
+                upd_dir = os.path.join(exe_dir, 'update')
+                os.makedirs(upd_dir, exist_ok=True)
+                _ver = str(manifest.get('version', ''))
+                new_exe = os.path.join(upd_dir, f'boxingapp_{_ver}.exe' if _ver else 'boxingapp_new.exe')
                 with open(new_exe, 'wb') as f:
                     f.write(content)
-                # bat-скрипт: ждём завершения основного процесса, заменяем exe и перезапускаем
-                upd_script = os.path.join(tmp_dir, 'apply_update.bat')
-                proc_name = name if getattr(sys, 'frozen', False) else 'python.exe'
-                bat = (
-                    '@echo off\r\n'
-                    'rem Автообновление BoxingApp — не закрывайте это окно.\r\n'
-                    'set "PRNAME=%s"\r\n'
-                    'set "TMPD=%s"\r\n'
-                    'set "EXEDIR=%s"\r\n'
-                    'rem Ждём, пока процесс приложения полностью завершится (Windows блокирует работающий .exe)\r\n'
-                    ':wait\r\n'
-                    'tasklist /fi "imagename eq %%PRNAME%%" 2>nul | find /i "%%PRNAME%%" >nul\r\n'
-                    'if errorlevel 1 goto dead\r\n'
-                    'taskkill /im "%%PRNAME%%" /f >nul 2>&1\r\n'
-                    'timeout /t 1 /nobreak >nul\r\n'
-                    'goto wait\r\n'
-                    ':dead\r\n'
-                    'rem Копируем новый exe в рабочую папку\r\n'
-                    'copy /y "%%TMPD%%\\boxingapp_new.exe" "%%EXEDIR%%\\boxingapp.exe" >nul\r\n'
-                    'if errorlevel 1 goto fail\r\n'
-                    'rem Удаляем только временный exe и сам скрипт. Папку НЕ удаляем, '
-                    'иначе Windows перестанет читать запущенный из неё bat (ошибка пути/памяти).\r\n'
-                    'del /q "%%TMPD%%\\boxingapp_new.exe" >nul 2>&1\r\n'
-                    'del /q "%%TMPD%%\\apply_update.bat" >nul 2>&1\r\n'
-                    'rem Перезапуск приложения\r\n'
-                    'rem start БЕЗ /b: запускаем GUI-процесс отдельно от консоли bat, '
-                    'чтобы он не завершался вместе с закрытием этой консоли.\r\n'
-                    'cd /d "%%EXEDIR%%"\r\n'
-                    'start "" "%%EXEDIR%%\\boxingapp.exe"\r\n'
-                    'exit\r\n'
-                    ':fail\r\n'
-                    'echo Ошибка: не удалось обновить исполняемый файл.\r\n'
-                    'pause\r\n'
-                ) % (proc_name, tmp_dir, exe_dir)
-                with open(upd_script, 'w', encoding='utf-8', errors='replace') as f:
-                    f.write(bat)
                 updated.append(name)
-                need_restart = True
+                # НЕ запускаем скрипт-обновлятель и НЕ запрашиваем перезапуск — exe вручную
+                continue
             except Exception as e:
-                return jsonify({'error': f'Не удалось подготовить обновление exe: {e}'}), 500
-            # Перерыв после цикла: запуск скрипта-обновлятеля + сообщение о перезапуске
-            _pending_exe = os.path.join(tmp_dir, 'apply_update.bat')
-            return jsonify({
-                'ok': True, 'version': version, 'updated': updated, 'skipped': skipped,
-                'need_restart': True, 'restart_script': _pending_exe
-            })
+                return jsonify({'error': f'Не удалось скачать обновление exe: {e}'}), 500
 
         try:
             content = _fetch_url(f'{base}/{rel}', timeout=30)
@@ -2098,7 +2057,8 @@ def update_local():
     Внутри архива должен лежать update-manifest.json с полями version и files.
     Файлы распаковываются в каталог данных/ассетов (портативная версия -> рядом с exe),
     список разрешённых файлов — UPDATE_ALLOWED. Если в пакете есть boxingapp.exe —
-    готовится скрипт-обновлятель (как при онлайн-обновлении) и запрашивается перезапуск.
+    новый exe с версией в имени сохраняется в папку update/ рядом с приложением и
+    НЕ применяется автоматически: пользователь ставит его вручную.
     """
     if 'file' not in request.files:
         return jsonify({'error': 'Не передан файл обновления'}), 400
@@ -2164,45 +2124,18 @@ def update_local():
 
                 content = z.read(entry)
 
-                # Обновление exe — отдельный путь (Windows блокирует работающий exe)
+                # Обновление exe — скачиваем в папку update/ рядом с приложением,
+                # НО не применяем автоматически: пользователь ставит новый exe вручную.
                 if name == 'boxingapp.exe':
                     exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False) else str(app_dir)
-                    tmp_dir = os.path.join(exe_dir, '__exe_update__')
-                    os.makedirs(tmp_dir, exist_ok=True)
-                    new_exe = os.path.join(tmp_dir, 'boxingapp_new.exe')
+                    upd_dir = os.path.join(exe_dir, 'update')
+                    os.makedirs(upd_dir, exist_ok=True)
+                    _ver = str(manifest.get('version', ''))
+                    new_exe = os.path.join(upd_dir, f'boxingapp_{_ver}.exe' if _ver else 'boxingapp_new.exe')
                     with open(new_exe, 'wb') as fw:
                         fw.write(content)
-                    upd_script = os.path.join(tmp_dir, 'apply_update.bat')
-                    proc_name = 'boxingapp.exe' if getattr(sys, 'frozen', False) else 'python.exe'
-                    bat = (
-                        '@echo off\r\n'
-                        'rem Автообновление BoxingApp (локальный пакет) — не закрывайте это окно.\r\n'
-                        'set "PRNAME=%s"\r\n'
-                        'set "TMPD=%s"\r\n'
-                        'set "EXEDIR=%s"\r\n'
-                        ':wait\r\n'
-                        'tasklist /fi "imagename eq %%PRNAME%%" 2>nul | find /i "%%PRNAME%%" >nul\r\n'
-                        'if errorlevel 1 goto dead\r\n'
-                        'taskkill /im "%%PRNAME%%" /f >nul 2>&1\r\n'
-                        'timeout /t 1 /nobreak >nul\r\n'
-                        'goto wait\r\n'
-                        ':dead\r\n'
-                        'copy /y "%%TMPD%%\\boxingapp_new.exe" "%%EXEDIR%%\\boxingapp.exe" >nul\r\n'
-                        'if errorlevel 1 goto fail\r\n'
-                        'del /q "%%TMPD%%\\boxingapp_new.exe" >nul 2>&1\r\n'
-                        'del /q "%%TMPD%%\\apply_update.bat" >nul 2>&1\r\n'
-                        'cd /d "%%EXEDIR%%"\r\n'
-                        'start "" "%%EXEDIR%%\\boxingapp.exe"\r\n'
-                        'exit\r\n'
-                        ':fail\r\n'
-                        'echo Ошибка: не удалось обновить исполняемый файл.\r\n'
-                        'pause\r\n'
-                    ) % (proc_name, tmp_dir, exe_dir)
-                    with open(upd_script, 'w', encoding='utf-8', errors='replace') as fw:
-                        fw.write(bat)
                     updated.append(name)
-                    need_restart = True
-                    pending_exe = upd_script
+                    # НЕ ставим need_restart — exe применяется вручную пользователем
                     continue
 
                 # Обычные файлы — пишем напрямую в каталог данных/ассетов
@@ -4829,8 +4762,8 @@ def report_pkdrk(tournament_id):
 
     new_row = __import__('copy').deepcopy(str1)
     new_row.clear()
-    # 4 пустые ячейки (№, название, ВСЕГО, КОЛ-ВО)
-    for _ in range(4):
+    # 3 пустые ячейки (№, название, КОЛ-ВО уч-ков м.п.)
+    for _ in range(3):
         c = __import__('copy').deepcopy(sep_proto)
         set_cell_text(c, '')
         new_row.append(c)
@@ -4872,8 +4805,7 @@ def report_pkdrk(tournament_id):
         cells = []
         c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, str(idx)); cells.append(c)
         c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, rname); cells.append(c)
-        c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, str(nm + nd)); cells.append(c)
-        c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, str(nm)); cells.append(c)
+        c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, str(nm)); cells.append(c)  # КОЛ-ВО уч-ков (м.п.)
         for w in male_weights:
             v = mcount.get(w, 0)
             c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, str(v) if v else ''); cells.append(c)
@@ -4900,8 +4832,7 @@ def report_pkdrk(tournament_id):
     cells = []
     c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, ''); cells.append(c)
     c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, 'ВСЕГО:'); cells.append(c)
-    c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, str(all_m + all_d)); cells.append(c)
-    c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, str(all_m)); cells.append(c)
+    c = __import__('copy').deepcopy(sep_proto); set_cell_text(c, str(all_m)); cells.append(c)  # itum — всего участников мужчин
     for w in male_weights:
         v = sum(1 for s in lottery
                 if _wc_gender(s['weight_class']) == 'мужской'
@@ -4973,7 +4904,7 @@ def report_pkdrk(tournament_id):
                         gs.set(_qn('w:val'), str(max(1, len(female_weights))))
 
             new_h0 = __import__('copy').deepcopy(ah); new_h0.clear()
-            for _ in range(4):
+            for _ in range(3):
                 c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, ''); new_h0.append(c)
             for w in male_weights:
                 c = __import__('copy').deepcopy(weight_proto_a); set_cell_text(c, _fmt_w(w)); new_h0.append(c)
@@ -5005,7 +4936,6 @@ def report_pkdrk(tournament_id):
                 cells = []
                 c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, str(y_idx)); cells.append(c)
                 c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, str(y)); cells.append(c)
-                c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, str(nm + nd)); cells.append(c)
                 c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, str(nm)); cells.append(c)  # КОЛ-ВО (допущено мужчин)
                 for w in male_weights:
                     v = mm.get(w, 0)
@@ -5031,8 +4961,8 @@ def report_pkdrk(tournament_id):
             cells = []
             c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, ''); cells.append(c)
             c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, 'ВСЕГО:'); cells.append(c)
-            c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, str(tm_all + td_all)); cells.append(c)  # itvmy — ВСЕГО уч-ков (всех)
-            c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, str(tm_all)); cells.append(c)  # itdmv — КОЛ-ВО уч-ков (мужчин)
+            c = __import__('copy').deepcopy(sep_proto_a); set_cell_text(c, str(tm_all)); cells.append(c)  # itumv — итого участников мужчин по возрасту
+            # (было: отдельный столбец «ВСЕГО уч-ков» всех — убран из шаблона)
             for w in male_weights:
                 v = sum(1 for s in lottery
                         if _wc_gender(s['weight_class']) == 'мужской'
@@ -5051,16 +4981,16 @@ def report_pkdrk(tournament_id):
             age_el.append(nt2)
 
             # ---- Пересобираем сетку колонок таблицы по возрасту ----
-            _ncols_a = 4 + len(male_weights) + 1 + len(female_weights)
+            _ncols_a = 3 + len(male_weights) + 1 + len(female_weights)
             age_grid = age_el.find(_qn('w:tblGrid'))
             if age_grid is not None:
                 age_grid.clear()
-                _geom_a = [500, 900, 700, 700]
+                _geom_a = [500, 900, 1300]   # №, год рождения, КОЛ-ВО уч-ков (м.п.)
                 _rest_a = _total_w - sum(_geom_a)
-                _n_rest_a = max(1, _ncols_a - 4)
+                _n_rest_a = max(1, _ncols_a - 3)
                 _w_rest_a = int(_rest_a / _n_rest_a)
                 _col_w_a = list(_geom_a)
-                for _ in range(_ncols_a - 4):
+                for _ in range(_ncols_a - 3):
                     _col_w_a.append(_w_rest_a)
                 for _w in _col_w_a:
                     el = _px('<w:gridCol xmlns:w="%s" w:w="%d"/>' % (_WNS, _w))
@@ -5163,7 +5093,7 @@ def report_pkdrk(tournament_id):
             sk_el.remove(sh)
 
             new_h1 = __import__('copy').deepcopy(sh); new_h1.clear()
-            for _ in range(4):
+            for _ in range(3):
                 c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, ''); new_h1.append(c)
             for w in male_weights:
                 c = __import__('copy').deepcopy(weight_proto_s); set_cell_text(c, _fmt_w(w)); new_h1.append(c)
@@ -5198,8 +5128,7 @@ def report_pkdrk(tournament_id):
                 cells = []
                 c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(rk_idx)); cells.append(c)
                 c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, _short_sk(rk_name)); cells.append(c)
-                c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(nm + nd)); cells.append(c)
-                c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(nm)); cells.append(c)
+                c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(nm)); cells.append(c)  # КОЛ-ВО уч-ков (м.п.)
                 for w in male_weights:
                     v = mc.get(w, 0)
                     c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(v) if v else ''); cells.append(c)
@@ -5225,8 +5154,7 @@ def report_pkdrk(tournament_id):
             cells = []
             c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, ''); cells.append(c)
             c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, 'ВСЕГО:'); cells.append(c)
-            c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(it_all)); cells.append(c)  # itu
-            c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(it_m)); cells.append(c)    # ikdm
+            c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(it_m)); cells.append(c)    # itkum — итого участников мужчин по квалификации
             for w in male_weights:
                 v = _mmW.get(w, 0)
                 c = __import__('copy').deepcopy(sep_proto_s); set_cell_text(c, str(v) if v else ''); cells.append(c)  # ikuvm
@@ -5239,16 +5167,16 @@ def report_pkdrk(tournament_id):
             sk_el.append(nt3)
 
             # ---- Пересобираем сетку колонок таблицы по квалификации ----
-            _ncols_s = 4 + len(male_weights) + 1 + len(female_weights)
+            _ncols_s = 3 + len(male_weights) + 1 + len(female_weights)
             sk_grid = sk_el.find(_qn('w:tblGrid'))
             if sk_grid is not None:
                 sk_grid.clear()
-                _geom_s = [500, 1300, 700, 700]
+                _geom_s = [500, 1300, 1300]   # №, спорт. квалификация, КОЛ-ВО уч-ков (м.п.)
                 _rest_s = _total_w - sum(_geom_s)
-                _n_rest_s = max(1, _ncols_s - 4)
+                _n_rest_s = max(1, _ncols_s - 3)
                 _w_rest_s = int(_rest_s / _n_rest_s)
                 _col_w_s = list(_geom_s)
-                for _ in range(_ncols_s - 4):
+                for _ in range(_ncols_s - 3):
                     _col_w_s.append(_w_rest_s)
                 for _w in _col_w_s:
                     el = _px('<w:gridCol xmlns:w="%s" w:w="%d"/>' % (_WNS, _w))
@@ -5279,20 +5207,20 @@ def report_pkdrk(tournament_id):
                         _ci += span
 
     # ---- Пересобираем сетку колонок (tblGrid) под фактическое число колонок ----
-    # Колонки: 4 (№, район, ВСЕГО, КОЛ-ВО) + мужские веса + 1 (разделитель) + женские веса
-    _ncols = 4 + len(male_weights) + 1 + len(female_weights)
+    # Колонки: 3 (№, район, КОЛ-ВО уч-ков м.п.) + мужские веса + 1 (разделитель) + женские веса
+    _ncols = 3 + len(male_weights) + 1 + len(female_weights)
     _grid = tbl_el.find(_qn('w:tblGrid'))
     if _grid is not None:
         _grid.clear()
         # итоговая ширина таблицы (dxa); поля документа лево/право 300 -> текст ~11306
         _total_w = 11282
-        # геометрия фиксированных колонок: №, район, ВСЕГО, КОЛ-ВО; остальное равными долями
-        _geom = [500, 2100, 700, 700]
+        # геометрия фиксированных колонок: №, район, КОЛ-ВО; остальное равными долями
+        _geom = [500, 2100, 1300]
         _rest = _total_w - sum(_geom)
-        _n_rest = max(1, _ncols - 4)
+        _n_rest = max(1, _ncols - 3)
         _w_rest = int(_rest / _n_rest)
         _col_w = list(_geom)
-        for _ in range(_ncols - 4):
+        for _ in range(_ncols - 3):
             _col_w.append(_w_rest)
         for _w in _col_w:
             el = _px('<w:gridCol xmlns:w="%s" w:w="%d"/>' % (_WNS, _w))
@@ -5356,10 +5284,10 @@ def report_grso(tournament_id):
     from collections import defaultdict as _dd
     from docx import Document as _Doc
 
-    # Найти шаблон grso_tmp.docx
-    tmpl = _report_template('grso_tmp.docx')
+    # Найти шаблон grso_new.docx (компактная «ёлка», ширины синхронны с кодом)
+    tmpl = _report_template('grso_new.docx')
     if not tmpl:
-        return jsonify({'error': 'Шаблон протокола графиков (grso_tmp.docx) не найден'}), 500
+        return jsonify({'error': 'Шаблон протокола графиков (grso_new.docx) не найден'}), 500
 
     # Данные турнира и жеребьёвки
     conn = get_db()
@@ -5496,9 +5424,9 @@ def report_grso(tournament_id):
                 'name': _copy2.deepcopy(_cells_at2(_r0)[1]),
                 'club': _copy2.deepcopy(_cells_at2(_r1)[1]),
                 'spacer': _copy2.deepcopy(_cells_at2(_r1)[2]),
-                'year': _copy2.deepcopy(_cells_at2(_r1)[3]),
+                'year': _copy2.deepcopy(_cells_at2(_r0)[2]),
                 'winner': _copy2.deepcopy(_cells_at2(_r1)[4]),
-                'champ': _copy2.deepcopy(_cells_at2(_r3)[5]),
+                'champ': _copy2.deepcopy(_cells_at2(_r1)[6]),
             }
             def _ensure_shd2(tc, fill):
                 tcPr = tc.find(_qn('w:tcPr'))
@@ -5514,9 +5442,11 @@ def report_grso(tournament_id):
                 tcPr = tc.find(_qn('w:tcPr'))
                 if tcPr is not None and tcPr.find(_qn('w:shd')) is not None:
                     tcPr.remove(tcPr.find(_qn('w:shd')))
-            _ensure_shd2(_atoms['champ'], 'FFFF00')
+            # без жёлтой заливки чемпиона (подгон под содержимое)
             _atoms['champ_plain'] = _copy2.deepcopy(_atoms['champ'])
             _clear_shd2(_atoms['champ_plain'])
+            # champ-атом тоже без фон, чтобы финал не был жёлтым
+            _atoms['champ'] = _copy2.deepcopy(_atoms['champ_plain'])
 
             def _set_tc_text2(tc, text):
                 ps = tc.findall(_qn('w:p'))
@@ -5537,6 +5467,26 @@ def report_grso(tournament_id):
                 else:
                     _r = _px('<w:r xmlns:w="%s"><w:t>%s</w:t></w:r>' % (_WNS, text))
                     p.append(_r)
+                # уменьшаем шрифт до 8pt (16 half-points) во всех runs, чтобы данные
+                # помещались на одной строке в тесных ячейках, не ломая структуры
+                try:
+                    for _r in p.findall(_qn('w:r')):
+                        _rpr = _r.find(_qn('w:rPr'))
+                        if _rpr is None:
+                            _rpr = _px('<w:rPr xmlns:w="%s"/>' % _WNS)
+                            _r.insert(0, _rpr)
+                        _sz = _rpr.find(_qn('w:sz'))
+                        if _sz is None:
+                            _sz = _px('<w:sz xmlns:w="%s"/>' % _WNS)
+                            _rpr.append(_sz)
+                        _sz.set(_qn('w:val'), '16')  # 8pt
+                        _szcs = _rpr.find(_qn('w:szCs'))
+                        if _szcs is None:
+                            _szcs = _px('<w:szCs xmlns:w="%s"/>' % _WNS)
+                            _rpr.append(_szcs)
+                        _szcs.set(_qn('w:val'), '16')
+                except Exception:
+                    pass
 
             def _clear_tc2(tc):
                 for p in tc.findall(_qn('w:p')):
@@ -5569,29 +5519,27 @@ def report_grso(tournament_id):
                         borders.remove(el)
 
             def _build_bracket(members, results_map):
-                """members: [(name, club, year), ...]; results_map: pair_index -> name."""
+                """members: [(name, club, year), ...]; results_map: pair_index -> name.
+
+                Строит универсальную «ёлку» (single-elimination): n участников ->
+                total_slots = 2^ceil(log2(n)) слотов; пары -> полуфиналы -> финал.
+                Лесенка рисуется вертикальными объединениями (vMerge) + верхними
+                перекладинами-развилками (top=single на середине блока), как в шаблоне.
+                """
                 n = len(members)
                 total_slots = 2 ** math.ceil(math.log2(n)) if n > 1 else 1
                 num_rounds = int(math.log2(total_slots)) if total_slots > 1 else 1
-                champ_col = num_rounds - 1
-                m_final = 2 ** num_rounds
-                top_ws = m_final // 4 - 1 if num_rounds >= 1 else 0
-                bot_ws = m_final // 4 * 3 - 1 if num_rounds >= 1 else 0
-                grid_widths = [540, 2340, 900, 1323]
+                # Компактные ширины (порядок сохранён: № | Имя | Клуб | Год | Лесенка).
+                # Суммарная ширина укладывается в страницу (~9000 twips).
+                grid_widths = [380, 1600, 1300, 640]
                 round1_idx = len(grid_widths)
+                _base_budget = 5000
+                _rw = max(700, _base_budget // max(1, num_rounds))
                 for _r in range(num_rounds):
-                    grid_widths.append(1701 if _r < num_rounds - 1 else 1843)
+                    grid_widths.append(_rw)
                 total_w = sum(grid_widths)
                 tblPr = _px(
                     '<w:tblPr xmlns:w="%s"><w:tblW w:w="%s" w:type="dxa"/>'
-                    '<w:tblBorders>'
-                    '<w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
-                    '<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
-                    '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
-                    '<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
-                    '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
-                    '<w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
-                    '</w:tblBorders>'
                     '<w:tblLayout w:type="fixed"/>'
                     '<w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" '
                     'w:lastColumn="0" w:noHBand="0" w:noVBand="0"/></w:tblPr>' % (_WNS, total_w))
@@ -5600,99 +5548,162 @@ def report_grso(tournament_id):
                     grid_el.append(_px('<w:gridCol xmlns:w="%s" w:w="%s"/>' % (_WNS, _wd)))
                 tbl = _px('<w:tbl xmlns:w="%s"/>' % _WNS)
                 tbl.append(tblPr); tbl.append(grid_el)
-                winner_cells = {}
-                for _r in range(num_rounds):
-                    n_groups = total_slots // (2 ** (_r + 1))
-                    for _g in range(n_groups):
-                        # победитель матча (раунд _r, группа _g) поднимается в верхнюю
-                        # строку блока группы: row = 2 * (g * 2**(r+1))
-                        _row = 2 * (_g * (2 ** (_r + 1)))
-                        _col = round1_idx + _r
-                        _pi = _g if _r == 0 else (_r * 1000 + _g)
-                        winner_cells[(_row, _col)] = results_map.get(_pi, '')
-                def _outcome_borders(_c, slot_idx, is_name_row):
-                    if _c == champ_col:
-                        if not is_name_row and is_champ_slot(slot_idx):
-                            return ['bottom', 'left']
-                        if num_rounds >= 2 and (top_ws < slot_idx <= bot_ws):
-                            return ['left']
-                        return []
-                    span = 2 ** (_c + 1)
-                    _g = slot_idx // span
-                    s_node = _g * span + (span // 2 - 1)
-                    pair_complete = (s_node + 1 < n) if _c == 0 else True
-                    if not pair_complete:
-                        return []
-                    if not is_name_row and slot_idx == s_node:
-                        return ['left', 'bottom']
-                    if is_name_row and slot_idx == s_node + 1:
-                        return ['left', 'top']
-                    if not is_name_row and slot_idx == total_slots - 1:
-                        return ['left']
-                    return []
-                def is_champ_slot(sidx):
-                    return (sidx * 2 + 1 == total_slots - 1)
-                def _winner_pair_for(row, _col, _nr, _ts):
-                    _r = _col - round1_idx
-                    if _r < 0 or _r >= _nr:
-                        return None
-                    slot = row // 2
-                    g = slot // (2 ** (_r + 1))
-                    top_slot_of_group = g * (2 ** (_r + 1))
-                    if slot != top_slot_of_group:
-                        return None
-                    _pi = g if _r == 0 else (_r * 1000 + g)
-                    return _pi
 
-                def _make_row(is_name_row, slot_idx, sl):
-                    tr = _px('<w:tr xmlns:w="%s"/>' % _WNS)
-                    out = []
+                nrows = 2 * total_slots
+                ncols = len(grid_widths)
+                # ячейки левой части (слоты) и раундов — раздельно, чтобы не путать индексы
+                # из-за gridSpan. cells[row][колонка сетки 0..], round_cells[row][round]
+                cells = [[None]*ncols for _ in range(nrows)]
+                round_cells = [[None]*num_rounds for _ in range(nrows)]
+
+                def _gridspan(tc, val):
+                    tcPr = tc.find(_qn('w:tcPr'))
+                    if tcPr is None:
+                        tcPr = _px('<w:tcPr xmlns:w="%s"/>' % _WNS)
+                        tc.insert(0, tcPr)
+                    gs = tcPr.find(_qn('w:gridSpan'))
+                    if gs is None:
+                        gs = _px('<w:gridSpan xmlns:w="%s"/>' % _WNS)
+                        tcPr.append(gs)
+                    gs.set(_qn('w:val'), str(val))
+
+                def _nowrap(tc):
+                    # данные на одной строке: запрет переноса внутри ячейки
+                    tcPr = tc.find(_qn('w:tcPr'))
+                    if tcPr is None:
+                        tcPr = _px('<w:tcPr xmlns:w="%s"/>' % _WNS)
+                        tc.insert(0, tcPr)
+                    if tcPr.find(_qn('w:noWrap')) is None:
+                        tcPr.append(_px('<w:noWrap xmlns:w="%s"/>' % _WNS))
+
+                def _set_tcw(tc, width):
+                    # перезаписать ширину ячейки (tcW) компактным значением из grid_widths,
+                    # иначе Word берёт старый tcW атома из шаблона (540/1587/1701/...)
+                    tcPr = tc.find(_qn('w:tcPr'))
+                    if tcPr is None:
+                        tcPr = _px('<w:tcPr xmlns:w="%s"/>' % _WNS)
+                        tc.insert(0, tcPr)
+                    tcW = tcPr.find(_qn('w:tcW'))
+                    if tcW is None:
+                        tcW = _px('<w:tcW xmlns:w="%s"/>' % _WNS)
+                        tcPr.insert(0, tcW)
+                    tcW.set(_qn('w:type'), 'dxa')
+                    tcW.set(_qn('w:w'), str(width))
+
+                def _fill_left(tr, is_name_row, slot_idx, sl):
+                    # name: [№][имя(gridSpan=2)] [год]     -> занимает сеточные колонки 0,1-2,3
+                    # club: [№][клуб] [пусто] [пусто]       -> занимает сеточные колонки 0,1,2,3
                     if is_name_row:
-                        num_tc = _copy2.deepcopy(_atoms['num']); _set_tc_text2(num_tc, str(slot_idx + 1) if sl else '')
+                        num_tc = _copy2.deepcopy(_atoms['num']); _set_tc_text2(num_tc, str(slot_idx+1) if sl else '')
                         name_tc = _copy2.deepcopy(_atoms['name']); _set_tc_text2(name_tc, sl[0] if sl else '')
+                        _gridspan(name_tc, 2)
                         yr_tc = _copy2.deepcopy(_atoms['year']); _set_tc_text2(yr_tc, sl[2] if sl else '')
-                        if 'left' in _outcome_borders(0, slot_idx, True):
-                            _set_borders2(yr_tc, ['right'])
-                        else:
-                            _set_borders2(yr_tc, [])
-                        out = [num_tc, name_tc, yr_tc]
-                        for _c in range(num_rounds):
-                            base = _atoms['winner'] if _c < num_rounds - 1 else _atoms['champ_plain']
-                            _oc = _copy2.deepcopy(base); _clear_tc2(_oc)
-                            _pi = _winner_pair_for(2 * slot_idx, round1_idx + _c, num_rounds, total_slots)
-                            _text = results_map.get(_pi, '') if _pi is not None else ''
-                            _set_tc_text2(_oc, _text)
-                            _set_borders2(_oc, _outcome_borders(_c, slot_idx, True))
-                            out.append(_oc)
+                        _set_borders2(yr_tc, ['right'])
+                        _nowrap(num_tc); _nowrap(name_tc); _nowrap(yr_tc)
+                        # компактные ширины: №=380, имя(span2)=1600+1300, год=640
+                        _set_tcw(num_tc, 380)
+                        _set_tcw(name_tc, 1600 + 1300)
+                        _set_tcw(yr_tc, 640)
+                        tcs = [num_tc, name_tc, yr_tc]
                     else:
                         num_tc = _copy2.deepcopy(_atoms['num']); _clear_tc2(num_tc)
                         club_tc = _copy2.deepcopy(_atoms['club']); _set_tc_text2(club_tc, sl[1] if sl else '')
-                        sp_tc = _copy2.deepcopy(_atoms['spacer']); _clear_tc2(sp_tc)
-                        yr_tc = _copy2.deepcopy(_atoms['year']); _clear_tc2(yr_tc)
-                        if 'left' in _outcome_borders(0, slot_idx, False):
-                            _set_borders2(yr_tc, ['right'])
-                        else:
-                            _set_borders2(yr_tc, [])
-                        out = [num_tc, club_tc, sp_tc, yr_tc]
-                        champion_row = total_slots - 1
-                        for _c in range(num_rounds):
-                            _col = round1_idx + _c
-                            is_champ_cell = (_c == num_rounds - 1) and (slot_idx * 2 + 1 == champion_row)
-                            base = _atoms['winner'] if _c < num_rounds - 1 else (
-                                _atoms['champ'] if is_champ_cell else _atoms['champ_plain'])
-                            tc = _copy2.deepcopy(base); _clear_tc2(tc)
-                            _rr = 2 * slot_idx + 1
-                            _text = winner_cells.get((_rr, _col), '')
-                            _set_borders2(tc, _outcome_borders(_c, slot_idx, False))
-                            _set_tc_text2(tc, _text)
-                            out.append(tc)
-                    for tc in out:
+                        sp1_tc = _copy2.deepcopy(_atoms['spacer']); _clear_tc2(sp1_tc)
+                        sp2_tc = _copy2.deepcopy(_atoms['spacer']); _clear_tc2(sp2_tc)
+                        _set_borders2(sp2_tc, ['right'])
+                        _nowrap(num_tc); _nowrap(club_tc); _nowrap(sp1_tc); _nowrap(sp2_tc)
+                        # №=380, клуб=1600, спейсер1=1300, спейсер2(=год зона)=640
+                        _set_tcw(num_tc, 380)
+                        _set_tcw(club_tc, 1600)
+                        _set_tcw(sp1_tc, 1300)
+                        _set_tcw(sp2_tc, 640)
+                        tcs = [num_tc, club_tc, sp1_tc, sp2_tc]
+                    for tc in tcs:
                         tr.append(tc)
-                    return tr
+                    return tcs
+
+                # 1) Левая часть (слоты) и ПУСТЫЕ ячейки раундов (по одному tc в колонке)
                 for _i in range(total_slots):
                     sl = members[_i] if _i < n else None
-                    tbl.append(_make_row(True, _i, sl))
-                    tbl.append(_make_row(False, _i, sl))
+                    nr = 2*_i; cr = nr+1
+                    trN = _px('<w:tr xmlns:w="%s"/>' % _WNS)
+                    leftN = _fill_left(trN, True, _i, sl)
+                    trC = _px('<w:tr xmlns:w="%s"/>' % _WNS)
+                    leftC = _fill_left(trC, False, _i, sl)
+                    # раунд-колонки: отдельные tc в каждой строке; индексы — абсолютные
+                    for _rr_idx in (nr, cr):
+                        _tr = trN if _rr_idx == nr else trC
+                        left = leftN if _rr_idx == nr else leftC
+                        # записываем левые ячейки в cells по их абс. колонкам
+                        for _k, _tc in enumerate(left):
+                            cells[_rr_idx][_k] = _tc
+                        for _c in range(num_rounds):
+                            _col = round1_idx + _c
+                            base = _atoms['champ'] if (_c == num_rounds-1) else _atoms['winner']
+                            tc = _copy2.deepcopy(base); _clear_tc2(tc)
+                            _set_tcw(tc, grid_widths[_col])  # компактная ширина раунда
+                            _nowrap(tc)
+                            _tr.append(tc)
+                            cells[_rr_idx][_col] = tc
+                            round_cells[_rr_idx][_c] = tc
+                    tbl.append(trN); tbl.append(trC)
+
+                # 2) vMerge-блоки раундов + развилки
+                def _add_borders2(tc, sides):
+                    # добавить (не заменяя) границы tcBorders для списка сторон
+                    _set_borders2(tc, sides + list(_existing_sides(tc)))
+
+                def _existing_sides(tc):
+                    tcPr = tc.find(_qn('w:tcPr'))
+                    res = []
+                    if tcPr is not None:
+                        b = tcPr.find(_qn('w:tcBorders'))
+                        if b is not None:
+                            for el in b:
+                                sd = el.tag.split('}')[-1]
+                                res.append(sd)
+                    return res
+
+                for _r in range(num_rounds):
+                    gsize = 2 ** (_r + 1)
+                    n_groups = total_slots // gsize
+                    for _g in range(n_groups):
+                        base = _g * gsize
+                        top_row = 2 * base
+                        bot_row = 2 * (base + gsize) - 1
+                        _pi = _g if _r == 0 else (_r * 1000 + _g)
+                        winner = results_map.get(_pi, '')
+                        block_rows = list(range(top_row, bot_row+1))
+                        # верхняя ячейка блока: имя победителя (без жёлтой заливки финала)
+                        top_tc = round_cells[top_row][_r]
+                        _set_tc_text2(top_tc, winner)
+                        _nowrap(top_tc)
+                        # границы блока: left на все строки, top-перекладина на середине
+                        mid_row = top_row + gsize - 1
+                        for ri in block_rows:
+                            tc = round_cells[ri][_r]
+                            _add_borders2(tc, ['left'])
+                            if ri in (top_row, bot_row):
+                                _add_borders2(tc, ['right'])
+                            if ri == mid_row:
+                                _add_borders2(tc, ['top'])
+                        # vMerge
+                        for idx, ri in enumerate(block_rows):
+                            tc = round_cells[ri][_r]
+                            tcPr = tc.find(_qn('w:tcPr'))
+                            if tcPr is None:
+                                tcPr = _px('<w:tcPr xmlns:w="%s"/>' % _WNS)
+                                tc.insert(0, tcPr)
+                            # удалить существующий vMerge (атом из шаблона его уже содержит)
+                            old = tcPr.find(_qn('w:vMerge'))
+                            if old is not None:
+                                tcPr.remove(old)
+                            vm = _px('<w:vMerge xmlns:w="%s"/>' % _WNS)
+                            if idx == 0:
+                                vm.set(_qn('w:val'), 'restart')
+                            else:
+                                vm.set(_qn('w:val'), 'continue')
+                            tcPr.append(vm)
                 return tbl
 
     # Для каждой категории клонируем блок прототипа
