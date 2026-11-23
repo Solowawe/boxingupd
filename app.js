@@ -2384,28 +2384,28 @@ setupExport() {
             toast('Нет данных для сохранения');
             return;
         }
+        // Отправляем через скрытую form методом POST — браузер скачает файл
+        // напрямую (Content-Disposition: attachment), без перехода на blob: URL.
         try {
-            const res = await fetch('/api/weighin/export', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ rows })
-            });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || 'Ошибка при сохранении');
-            }
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `vzveshivanie_${Date.now()}.docx`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            // Отзываем blob: URL с задержкой — иначе браузер может открыть
-            // blob вместо скачивания (переход на blob:...).
-            setTimeout(() => URL.revokeObjectURL(url), 1500);
-            toast('💾 Таблица взвешивания сохранена в Word', 'success');
+            const select = document.getElementById('weighin-tournament-select');
+            const tournamentId = select ? select.value : '';
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/api/weighin/export';
+            form.style.display = 'none';
+            const addHidden = (name, value) => {
+                const i = document.createElement('input');
+                i.type = 'hidden';
+                i.name = name;
+                i.value = value;
+                form.appendChild(i);
+            };
+            addHidden('rows', JSON.stringify(rows));
+            if (tournamentId) addHidden('tournament_id', tournamentId);
+            document.body.appendChild(form);
+            form.submit();
+            document.body.removeChild(form);
+            toast('💾 Таблица взвешивания сохраняется в Word…', 'info', 3000);
         } catch (err) {
             toast('Ошибка сохранения в Word: ' + err.message);
         }

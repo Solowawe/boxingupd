@@ -3639,6 +3639,10 @@ def report_sostav_par(tournament_id):
                     continue
                 if a1 is None and a2 is not None:
                     a1, a2 = a2, None
+                # Только реальные пары: если второго бойца нет (a2 is None), это
+                # одиночный бай/ожидание соперника — в «Состав пар» не выводим.
+                if a2 is None:
+                    continue
                 # день пары = максимальный день из дней соперников (боец не может выступать раньше своего дня)
                 _pday = max(_lot_day.get(a1, 1), _lot_day.get(a2, 1))
                 plist.append((wc, gender, ys, rno, a1, a2, win, _pday))
@@ -3718,6 +3722,13 @@ def report_sostav_par(tournament_id):
                     '{TOURNAMENT_NAME}': t.get('name') or '',
                     '{DATE1-DATE2_YEAR}': date_label,
                 })
+                if part_name == 'footer':
+                    _replace_in_part(hdr_el, {
+                        '{ГлавныйСудьяФИО}': (t.get('chief_referee') or ''),
+                        '{ГлавныйСудьяРегион}': '',
+                        '{ГлавныйСекретарьФИО}': (t.get('chief_secretary') or ''),
+                        '{ГлавныйСекретарьРегион}': '',
+                    })
             except Exception:
                 pass
 
@@ -4359,7 +4370,7 @@ def report_participants(tournament_id):
     from docx.shared import Pt, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.oxml.ns import qn
+    from docx.oxml.ns import qn as _qn
 
     conn = get_db()
     t = row_to_dict(conn.execute("SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
@@ -4383,6 +4394,19 @@ def report_participants(tournament_id):
     sec.left_margin = Cm(1.5); sec.right_margin = Cm(1.5)
     sec.top_margin = Cm(1.5); sec.bottom_margin = Cm(1.5)
 
+    # Шаблон с гербом и подвалом (подписи судей), если есть; иначе программно
+    _pt_tmpl = _report_template('participants_tmp.docx')
+    if _pt_tmpl:
+        doc = Document(_pt_tmpl)
+        # удалить абзацы-заголовки из тела шаблона (перезаполним ниже)
+        for _p in list(doc.paragraphs):
+            _p._p.getparent().remove(_p._p)
+    else:
+        doc = Document()
+        sec = doc.sections[0]
+        sec.left_margin = Cm(1.5); sec.right_margin = Cm(1.5)
+        sec.top_margin = Cm(1.5); sec.bottom_margin = Cm(1.5)
+
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = title.add_run('ПРОТОКОЛ УЧАСТНИКОВ')
@@ -4399,12 +4423,58 @@ def report_participants(tournament_id):
     sub_run = sub.add_run(f"{t.get('name') or ''}".strip() + (f"\n{dates}" if dates else ''))
     sub_run.font.size = Pt(12)
 
+    # Заполняем маркеры в верхнем и нижнем колонтитулах шаблона (если он используется)
+    if _pt_tmpl:
+        for _sec in doc.sections:
+            for _pn in ('header', 'footer', 'first_page_header', 'first_page_footer'):
+                try:
+                    _part_el = getattr(_sec, _pn)._element
+                    for _p in _part_el.iter(_qn('w:p')):
+                        _full = ''.join(_rt.text or '' for _r in _p.findall(_qn('w:r')) for _rt in _r.findall(_qn('w:t')))
+                        _changed = False
+                        for _k, _v in {
+                            '{НАЗВАНИЕ_ТУРНИРА}': t.get('name') or '',
+                            '{ДатыПроведения}': dates,
+                            '{ГлавныйСудьяФИО}': (t.get('chief_referee') or ''),
+                            '{ГлавныйСудьяРегион}': '',
+                            '{ГлавныйСекретарьФИО}': (t.get('chief_secretary') or ''),
+                            '{ГлавныйСекретарьРегион}': '',
+                        }.items():
+                            if _k in _full:
+                                _full = _full.replace(_k, str(_v)); _changed = True
+                        if _changed:
+                            _runs = _p.findall(_qn('w:r'))
+                            if _runs:
+                                _ts0 = _runs[0].findall(_qn('w:t'))
+                                if _ts0:
+                                    _ts0[0].text = _full
+                                    for _r in _runs[1:]:
+                                        for _rt in _r.findall(_qn('w:t')):
+                                            _rt.text = ''
+                except Exception:
+                    pass
+
     headers = ['№', 'Ф.И.О.', 'Вес (кг)', 'Пол', 'Год рождения', 'Разряд', 'Регион', 'Тренер']
     widths = [Cm(1.0), Cm(4.2), Cm(1.6), Cm(1.9), Cm(2.0), Cm(2.2), Cm(2.6), Cm(2.8)]
 
     table = doc.add_table(rows=1, cols=len(headers))
-    table.style = 'Table Grid'
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    try:
+        table.style = 'Table Grid'
+    except Exception:
+        _W2 = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        _tw = table._tbl.find('{%s}tblPr' % _W2) if table._tbl is not None else None
+        _bx = ('<w:tblBorders xmlns:w="%s">'
+               '<w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+               '<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+               '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+               '<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+               '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+               '<w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+               '</w:tblBorders>') % _W2
+        from docx.oxml import parse_xml
+        if _tw is not None:
+            _tw.append(parse_xml(_bx))
     hdr = table.rows[0].cells
     for i, h in enumerate(headers):
         hdr[i].text = ''
@@ -5367,6 +5437,11 @@ def report_grso(tournament_id):
                 _replace_in_el(getattr(sec, pn)._element, {
                     '{TOURNAMENT_NAME}': t.get('name') or '',
                     '{DATE1-DATE2_YEAR}': dates,
+                    '{НАЗВАНИЕ_ТУРНИРА}': t.get('name') or '',
+                    '{ДатыПроведения}': dates,
+                    '{МестоПроведения}': (t.get('venue') or ''),
+                    '{ГлавныйСудьяФИО}': (t.get('chief_referee') or ''),
+                    '{ГлавныйСекретарьФИО}': (t.get('chief_secretary') or ''),
                 })
             except Exception:
                 pass
@@ -5374,6 +5449,19 @@ def report_grso(tournament_id):
         '{TOURNAMENT_NAME}': t.get('name') or '',
         '{DATE1-DATE2_YEAR}': dates,
     })
+
+    # Заменяем маркеры в footer'ах (подписи судей) отдельно надёжно
+    for sec in doc.sections:
+        for pn in ('footer', 'first_page_footer'):
+            try:
+                _replace_in_el(getattr(sec, pn)._element, {
+                    '{ГлавныйСудьяФИО}': (t.get('chief_referee') or ''),
+                    '{ГлавныйСудьяРегион}': '',
+                    '{ГлавныйСекретарьФИО}': (t.get('chief_secretary') or ''),
+                    '{ГлавныйСекретарьРегион}': '',
+                })
+            except Exception:
+                pass
 
     # Находим прототип: абзац с {WEIGHT_CLASS} + следующую за ним таблицу
     body = doc.element.body
@@ -5804,23 +5892,135 @@ def export_weighin_word():
     if not _HAS_DOCX:
         return jsonify({'error': 'Библиотека Word не установлена (python-docx)'}), 500
     data = request.get_json(silent=True) or {}
-    rows = data.get('rows') or []
+    rows = data.get('rows')
+    if rows is None and request.form:
+        # Поддержка отправки через скрытую HTML-форму (прямое скачивание файла)
+        _rv = request.form.get('rows') or ''
+        try:
+            rows = json.loads(_rv)
+        except Exception:
+            rows = []
+    rows = rows or []
     if not rows:
         return jsonify({'error': 'Нет данных для сохранения'}), 400
 
     from docx import Document
     from docx.shared import Pt, Cm
     from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml.ns import qn as _qn
     from io import BytesIO
 
-    doc = Document()
-    title = doc.add_heading('Таблица взвешивания', level=1)
-    title.alignment = 1  # центр
+    # tournament_id — из payload (JSON или form-data), для шапки/подписей
+    tournament_id = data.get('tournament_id')
+    if tournament_id is None and request.form:
+        try:
+            tournament_id = int(request.form.get('tournament_id') or 0) or None
+        except Exception:
+            tournament_id = None
+
+    _t_dates = ''
+    _t_name = ''
+    _t_chief_referee = ''
+    _t_chief_secretary = ''
+    if tournament_id:
+        _conn = get_db()
+        _tr = row_to_dict(_conn.execute(
+            "SELECT * FROM tournaments WHERE id=?", (tournament_id,)).fetchone())
+        _conn.close()
+        if _tr:
+            _t_name = _tr.get('name') or ''
+            _t_chief_referee = _tr.get('chief_referee') or ''
+            _t_chief_secretary = _tr.get('chief_secretary') or ''
+            def _fmtd(s):
+                p = (s or '').split('-')
+                return f'{p[2]}.{p[1]}.{p[0]}' if len(p) == 3 else (s or '').replace('-', '.')
+            _d1 = _fmtd(_tr.get('date_from') or '')
+            _d2 = _fmtd(_tr.get('date_to') or _tr.get('date_from') or '')
+            _t_dates = f'{_d1} — {_d2}' if _d2 and _d2 != _d1 else _d1
+
+    # Шаблон с гербом и нижним колонтитулом (подписи судей)
+    tmpl = _report_template('vzveshivanie_tmp.docx') or _report_template('pkdrk_template.docx')
+    doc = Document(tmpl) if tmpl else Document()
+
+    # Заполняем маркеры в колонтитулах шаблона (название, даты, ФИО и регионы судей)
+    if tmpl:
+        _w_main = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        for _sec in doc.sections:
+            for _pn in ('header', 'footer', 'first_page_header', 'first_page_footer'):
+                try:
+                    _part_el = getattr(_sec, _pn)._element
+                    if _part_el is None:
+                        continue
+                    for _p in _part_el.iter('{%s}p' % _w_main):
+                        _full = ''.join(_rt.text or '' for _r in _p.findall('{%s}r' % _w_main)
+                                        for _rt in _r.findall('{%s}t' % _w_main))
+                        _changed = False
+                        for _k, _v in {
+                            '{НАЗВАНИЕ_ТУРНИРА}': _t_name,
+                            '{ДатыПроведения}': _t_dates,
+                            '{ГлавныйСудьяФИО}': _t_chief_referee,
+                            '{ГлавныйСудьяРегион}': '',
+                            '{ГлавныйСекретарьФИО}': _t_chief_secretary,
+                            '{ГлавныйСекретарьРегион}': '',
+                        }.items():
+                            if _k in _full:
+                                _full = _full.replace(_k, str(_v)); _changed = True
+                        if _changed:
+                            _runs = _p.findall('{%s}r' % _w_main)
+                            if _runs:
+                                _ts0 = _runs[0].findall('{%s}t' % _w_main)
+                                if _ts0:
+                                    _ts0[0].text = _full
+                                    for _r in _runs[1:]:
+                                        for _rt in _r.findall('{%s}t' % _w_main):
+                                            _rt.text = ''
+                except Exception:
+                    pass
+
+        # Маркеры в теле документа (например «СОРЕВНОВАНИЯ {НАЗВАНИЕ_ТУРНИРА} {ДатыПроведения}»)
+        try:
+            for _p in doc.paragraphs:
+                _full = ''.join(_rt.text or '' for _r in _p._p.findall('{%s}r' % _w_main)
+                                for _rt in _r.findall('{%s}t' % _w_main))
+                _changed = False
+                for _k, _v in {
+                    '{НАЗВАНИЕ_ТУРНИРА}': _t_name,
+                    '{ДатыПроведения}': _t_dates,
+                }.items():
+                    if _k in _full:
+                        _full = _full.replace(_k, str(_v)); _changed = True
+                if _changed:
+                    _runs = _p._p.findall('{%s}r' % _w_main)
+                    if _runs:
+                        _ts0 = _runs[0].findall('{%s}t' % _w_main)
+                        if _ts0:
+                            _ts0[0].text = _full
+                            for _r in _runs[1:]:
+                                for _rt in _r.findall('{%s}t' % _w_main):
+                                    _rt.text = ''
+        except Exception:
+            pass
 
     headers = ['№', 'Ф.И.О.', 'Год рожд.', 'Пол', 'Регион', 'Вес (кг)']
     table = doc.add_table(rows=1, cols=len(headers))
-    table.style = 'Table Grid'
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # Стиль «Table Grid» есть не во всех шаблонах — пробуем, иначе границы вручную
+    try:
+        table.style = 'Table Grid'
+    except Exception:
+        _W2 = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        _tw = table._tbl.find('{%s}tblPr' % _W2) if table._tbl is not None else None
+        _border_xml = ('<w:tblBorders xmlns:w="%s">'
+                       '<w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+                       '<w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+                       '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+                       '<w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+                       '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+                       '<w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/>'
+                       '</w:tblBorders>') % 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        from docx.oxml import parse_xml
+        if _tw is not None:
+            _tw.append(parse_xml(_border_xml))
 
     hdr = table.rows[0].cells
     for j, h in enumerate(headers):
@@ -6306,6 +6506,21 @@ def export_weighin_reglament():
                             _set_cell_text(_cells[2 + _di], str(_tot_by_day[_di]) if _di < len(_tot_by_day) else '')
                     _set_cell_text(_cells[5], str(_tot_fights))
                 _last_tbl_el.append(_row)
+
+    # --- Заполняем нижний колонтитул (подписи судей) в export_weighin_reglament ---
+    try:
+        for sec in doc.sections:
+            for pn in ('footer', 'first_page_footer'):
+                _fpart = getattr(sec, pn)
+                for _fp in _fpart._element.iter(_qn('w:p')):
+                    _set_para_text(_fp, {
+                        '{ГлавныйСудьяФИО}': (t.get('chief_referee') or ''),
+                        '{ГлавныйСудьяРегион}': '',
+                        '{ГлавныйСекретарьФИО}': (t.get('chief_secretary') or ''),
+                        '{ГлавныйСекретарьРегион}': '',
+                    })
+    except Exception:
+        pass
 
     buf = BytesIO()
     doc.save(buf)
