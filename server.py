@@ -4113,10 +4113,7 @@ def report_ppp(tournament_id):
         bset = [b for b in (bronzes or []) if b is not None and b != champ and b != silver]
         for b in bset[:2]:
             put.append((3, b))
-        awarded = {_id for _, _id in put}
-        fifths = [s['athlete_id'] for s in slots if s['athlete_id'] not in awarded]
-        for f in fifths:
-            put.append((5, f))
+        # НЕ выводим 5-е места (по запросу: только 1, 2, 3-3)
         seen = set(); uniq = []
         for (place, _id) in put:
             if _id not in seen:
@@ -4216,7 +4213,7 @@ def report_ppp(tournament_id):
         if len(trs) < 7:
             return
         proto_weight = _copy.deepcopy(trs[1])
-        proto_rows = [_copy.deepcopy(trs[i]) for i in range(2, 7)]  # 1,2,3,3,5 место
+        proto_rows = [_copy.deepcopy(trs[i]) for i in range(2, 6)]  # 1,2,3,3 место (без 5-го)
         # удаляем строки кроме заголовка (row0)
         for tr in trs[1:]:
             tbl._tbl.remove(tr)
@@ -4232,7 +4229,7 @@ def report_ppp(tournament_id):
             else:
                 _replace_in_el(wrow, {'{WEIGHT_CLASS}': f'Весовая категория {weight} КГ'})
             tbl._tbl.append(wrow)
-            # строки призёров — до 5 (в шаблоне 1,2,3,3,5)
+            # строки призёров — до 4 (в шаблоне 1,2,3,3; без 5-го места)
             for idx in range(len(proto_rows)):
                 prow = _copy.deepcopy(proto_rows[idx])
                 cells = prow.findall(_qn('w:tc'))

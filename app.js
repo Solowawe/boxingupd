@@ -5295,21 +5295,18 @@ async advanceWinner(tournamentId, fight, winnerId) {
 
             const { rounds, champion, maxRounds } = buildRounds(slots, wc);
 
-            // Категория с ещё не решёнными боями финалист не даёт
-            if (champion == null) continue;
-
-            hasResults = true;
-            const gold = idName[champion] ? { name: idName[champion].name, id: champion } : null;
-
-            // Серебро — проигравший финала; бронза — ОБА проигравших полуфинала (две бронзы)
+            // Серебро — проигравший финала (если финал решён)
             let silver = null;
+            // Две бронзы — проигравшие ПОЛУФИНАЛОВ (решённых пар), появляются сразу
             const bronzes = [];   // два бронзовых призёра
             const finalRound = rounds[rounds.length - 1];
             if (finalRound.length === 1 && finalRound[0].a2 !== null) {
-                const finalPair = finalRound[0];
-                const la = fid(finalPair.a1), lb = fid(finalPair.a2);
-                const loserId = (la !== champion) ? la : lb;
-                if (loserId != null && idName[loserId]) silver = { name: idName[loserId].name, id: loserId };
+                const fp = finalRound[0];
+                if (fp.result && champion != null) {
+                    const la = fid(fp.a1), lb = fid(fp.a2);
+                    const loserId = (la !== champion) ? la : lb;
+                    if (loserId != null && idName[loserId]) silver = { name: idName[loserId].name, id: loserId };
+                }
             }
             if (maxRounds >= 2) {
                 const semiRound = rounds[rounds.length - 2];
@@ -5325,6 +5322,14 @@ async advanceWinner(tournamentId, fight, winnerId) {
                 }
             }
 
+            // Показываем категорию динамически: если есть хотя бы один решённый
+            // полуфинал с бронзовым призёром (или завершённый чемпион) — выводим.
+            // Данные дополняются при повторной отрисовке по мере появления боёв.
+            if (bronzes.length === 0 && champion == null) continue;
+
+            hasResults = true;
+            const gold = idName[champion] ? { name: idName[champion].name, id: champion } : null;
+
             // День финала
             const finalDay = this.roundToDay(maxRounds, maxRounds, tournamentDays);
             const finalName = finalRound.length === 1 && finalRound[0].a2 !== null ? 'Финал' : 'Победитель без соперника';
@@ -5332,13 +5337,15 @@ async advanceWinner(tournamentId, fight, winnerId) {
             html += `<div class="bracket-round"><h3 class="weight-title">${this.escapeHtml(wc)} <span class="day-tag">День ${finalDay}</span></h3>`;
 
             const medalStyle = (color, bg) => `style="border-color:${color}; background:${bg};"`;
-            // Победитель категории (Золото)
-            html += `<div class="result-card" ${medalStyle('#ffd700', 'rgba(255,215,0,0.1)')}>
-                <div class="result-fighters" style="justify-content:center; gap:16px;">
-                    <span style="font-size:1.8em;">🥇</span>
-                    <span style="font-size:1.3em; font-weight:700; color:#ffd700;">${gold ? this.escapeHtml(gold.name) : '—'}</span>
-                </div>
-            </div>`;
+            // Победитель категории (Золото) — показываем только когда определён
+            if (gold) {
+                html += `<div class="result-card" ${medalStyle('#ffd700', 'rgba(255,215,0,0.1)')}>
+                    <div class="result-fighters" style="justify-content:center; gap:16px;">
+                        <span style="font-size:1.8em;">🥇</span>
+                        <span style="font-size:1.3em; font-weight:700; color:#ffd700;">${this.escapeHtml(gold.name)}</span>
+                    </div>
+                </div>`;
+            }
 
             if (silver) {
                 html += `<div class="result-card" ${medalStyle('#c0c0c0', 'rgba(192,192,192,0.08)')}>
@@ -5348,7 +5355,7 @@ async advanceWinner(tournamentId, fight, winnerId) {
                     </div>
                 </div>`;
             }
-            // Две бронзы — оба проигравших полуфиналиста
+            // Две бронзы — оба проигравших полуфиналиста (появляются сразу)
             bronzes.forEach(b => {
                 html += `<div class="result-card" ${medalStyle('#cd7f32', 'rgba(205,127,50,0.08)')}>
                     <div class="result-fighters" style="justify-content:center; gap:16px;">
