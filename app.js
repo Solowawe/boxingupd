@@ -146,7 +146,7 @@ const App = {
     _ssKeys: ['weighin-tournament-select', 'weighin-search', 'weighin-gender-filter',
         'participant-tournament-select', 'athlete-tournament-select',
         'lottery-tournament-select', 'results-tournament-select',
-        'bracket-tournament-select', 'bracket-filter-gender', 'bracket-filter-weight',
+        'bracket-tournament-select', 'bracket-filter-weight',
         'participants-search', 'bracket-day-tabs'],
 
     _sessionSave(key, val) {
@@ -170,8 +170,8 @@ const App = {
             const el = document.getElementById(k);
             if (el) out[k] = el && el.value;
         }
-        for (const k of ['weighin-search', 'weighin-gender-filter', 'participants-search',
-            'bracket-filter-gender', 'bracket-filter-weight']) {
+        for (const k of ['weighin-search', 'participants-search',
+            'bracket-filter-weight']) {
             const el = document.getElementById(k);
             if (el) out[k] = el ? el.value : '';
         }
@@ -947,6 +947,13 @@ async openAbout() {
             });
         }
 
+        // Фильтр весовой категории в разделе «Участники»
+        const pWeightSel2 = document.getElementById('participants-filter-weight');
+        if (pWeightSel2 && !pWeightSel2.dataset.bound) {
+            pWeightSel2.dataset.bound = '1';
+            pWeightSel2.addEventListener('change', () => this.renderParticipants());
+        }
+
         // Восстанавливаем сохранённую сортировку участников из localStorage
         try {
             if (this._participantsSort == null) {
@@ -1161,6 +1168,13 @@ async openAbout() {
         try {
             const tournamentId = document.getElementById('participant-tournament-select')?.value;
             const tbody = document.getElementById('participants-list');
+            // Подсветка активной кнопки фильтра пола
+            const pCont = document.getElementById('tab-participants');
+            if (pCont) {
+                pCont.querySelectorAll('.participants-gender-tab').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.gender === ((this._participantsGender || '') || 'all'));
+                });
+            }
             const count = document.getElementById('participants-count');
             const searchInput = document.getElementById('participants-search');
             const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
@@ -1175,6 +1189,42 @@ async openAbout() {
             const athletes = await API.getAthletes();
             const tournamentAthleteIds = tournament.athlete_ids || [];
             let participants = athletes.filter(a => tournamentAthleteIds.includes(a.id));
+
+            // Фильтр по полу (кнопки-табы) и весовой категории (как в сетке)
+            const pGender = this._participantsGender || '';
+            const pWeight = document.getElementById('participants-filter-weight')?.value || '';
+            // Заполняем выпадающий список весовых категорий участников текущего турнира
+            const pWeightSel = document.getElementById('participants-filter-weight');
+            if (pWeightSel && !pWeightSel.dataset.initialized) {
+                const opts = ['<option value="">Все весовые категории</option>'];
+                const seen = {};
+                participants.forEach(a => {
+                    if (!a.weight) return;
+                    const g = this._normGender(a.gender);
+                    const wStr = Number.isInteger(Number(a.weight)) ? String(Number(a.weight)) : String(Number(a.weight));
+                    const key = `${g} ${wStr} кг`;
+                    if (!seen[key]) { seen[key] = 1; opts.push(`<option value="${this.escapeHtml(key)}">${this.escapeHtml(key)}</option>`); }
+                });
+                opts.sort((x, y) => {
+                    if (x.includes('»Все') || y.includes('»Все')) return 0;
+                    return x.localeCompare(y, 'ru');
+                });
+                const curW = pWeightSel.value;
+                pWeightSel.innerHTML = opts.join('');
+                if (curW) pWeightSel.value = curW;
+            }
+            // Применяем фильтры пола/веса
+            if (pGender) {
+                participants = participants.filter(a => (a.gender || '') === pGender);
+            }
+            if (pWeight) {
+                participants = participants.filter(a => {
+                    if (!a.weight) return false;
+                    const g = this._normGender(a.gender);
+                    const wStr = Number.isInteger(Number(a.weight)) ? String(Number(a.weight)) : String(Number(a.weight));
+                    return `${g} ${wStr} кг` === pWeight;
+                });
+            }
 
             // Применяем поиск
             if (searchTerm) {
@@ -1458,6 +1508,48 @@ async openAbout() {
         toast('📈 Протокол графиков формируется…', 'info', 3000);
     },
 
+    // Скачивание «Протокола комиссии по допуску» (.docx) из шаблона pkdrk_template.docx
+    downloadPkdrkDocx() {
+        const sel = document.getElementById('participant-tournament-select');
+        const tid = parseInt(sel && sel.value);
+        if (!tid) { toast('Сначала выберите соревнование', 'error'); return; }
+        const a = document.createElement('a');
+        a.href = `/api/report/${tid}/pkdrk`;
+        a.download = `protokol_tek_komissii_${tid}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast('📋 Протокол комиссии по допуску формируется…', 'info', 3000);
+    },
+
+    // Скачивание «Протокола участников» (.docx) — таблица участников выбранного соревнования
+    downloadParticipantsDocx() {
+        const sel = document.getElementById('participant-tournament-select');
+        const tid = parseInt(sel && sel.value);
+        if (!tid) { toast('Сначала выберите соревнование', 'error'); return; }
+        const a = document.createElement('a');
+        a.href = `/api/report/${tid}/participants`;
+        a.download = `protokol_uchastnikov_${tid}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast('📄 Протокол участников формируется…', 'info', 3000);
+    },
+
+    // Скачивание «Протокола победителей и призёров» (.docx) из шаблона ppp_tmp.docx
+    downloadPppDocx(forcedId) {
+        const sel = document.getElementById('results-tournament-select');
+        const tid = forcedId || parseInt(sel && sel.value);
+        if (!tid) { toast('Сначала выберите соревнование', 'error'); return; }
+        const a = document.createElement('a');
+        a.href = `/api/report/${tid}/ppp`;
+        a.download = `protokol_prizery_${tid}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast('📄 Протокол победителей формируется…', 'info', 3000);
+    },
+
     // Автоматически «провести» день N демо-турнира (сгенерировать схватки + победители)
     async simulateDay(tournamentId, day) {
         if (!confirm(`Провести день ${day}? Схватки этого дня будут сгенерированы и будут назначены победители.`)) return;
@@ -1556,6 +1648,16 @@ async openAbout() {
             if (select.options.length > 1) {
                 this.renderBracketSelect();
             }
+        }
+        // Кнопка «Протокол графиков» работает всегда: берём турнир из селекта сетки
+        const grsoBtn = document.getElementById('grso-download-btn');
+        if (grsoBtn) {
+            grsoBtn.onclick = () => {
+                const s = document.getElementById('bracket-tournament-select');
+                const id = parseInt(s && s.value);
+                if (!id) { toast('Сначала выберите соревнование в разделе «Сетка»', 'error'); return; }
+                this.downloadGrso(id);
+            };
         }
     },
 
@@ -2193,6 +2295,10 @@ setupExport() {
         if (genderFilter) {
             genderFilter.addEventListener('change', () => this.renderWeighin());
         }
+        const wFilterSel = document.getElementById('weighin-filter-weight');
+        if (wFilterSel) {
+            wFilterSel.addEventListener('change', () => this.renderWeighin());
+        }
         if (!select) {
             console.warn('setupWeighin: элемент weighin-tournament-select не найден');
             return;
@@ -2247,25 +2353,16 @@ setupExport() {
             toast('Выберите соревнование для сохранения регламента');
             return;
         }
-        try {
-            const res = await fetch(`/api/weighin/reglament?tournament_id=${tournamentId}`);
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.error || 'Ошибка при формировании регламента');
-            }
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `reglament_${tournamentId}.docx`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            toast('📄 Регламент сохранён в Word', 'success');
-        } catch (err) {
-            toast('Ошибка сохранения регламента: ' + err.message);
-        }
+        // Прямой переход по ссылке на эндпоинт, который возвращает файл
+        // с Content-Disposition: attachment — браузер сохранит .docx сразу,
+        // без создания blob: URL и перехода на него.
+        const a = document.createElement('a');
+        a.href = `/api/weighin/reglament?tournament_id=${tournamentId}`;
+        a.download = `reglament_${tournamentId}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast('📄 Регламент формируется…', 'info', 3000);
     },
 
     async saveWeighinWord() {
@@ -2305,18 +2402,40 @@ setupExport() {
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            // Отзываем blob: URL с задержкой — иначе браузер может открыть
+            // blob вместо скачивания (переход на blob:...).
+            setTimeout(() => URL.revokeObjectURL(url), 1500);
             toast('💾 Таблица взвешивания сохранена в Word', 'success');
         } catch (err) {
             toast('Ошибка сохранения в Word: ' + err.message);
         }
     },
 
+    // Фильтр пола в «Взвешивание» кнопками-табами ('' = все, 'мужской', 'женский')
+    setWeighinGender(g) {
+        this._weighinGender = g || '';
+        // Подсветка активной кнопки
+        const wcont = document.getElementById('tab-weighin');
+        if (wcont) {
+            wcont.querySelectorAll('.weighin-gender-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.gender === (g || 'all'));
+            });
+        }
+        this.renderWeighin();
+    },
+
     async renderWeighin() {
         try {
             const search = document.getElementById('weighin-search')?.value || '';
-            const gender = document.getElementById('weighin-gender-filter')?.value || '';
+            const gender = this._weighinGender || '';
             const tournamentId = document.getElementById('weighin-tournament-select')?.value;
+            // Подсветка активной кнопки фильтра пола
+            const wc2 = document.getElementById('tab-weighin');
+            if (wc2) {
+                wc2.querySelectorAll('.weighin-gender-tab').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.gender === ((this._weighinGender || '') || 'all'));
+                });
+            }
 
             let athletes = await API.getAthletes();
 
@@ -2325,6 +2444,34 @@ setupExport() {
                 const tournament = await API.getTournament(parseInt(tournamentId));
                 const tournamentAthleteIds = tournament.athlete_ids || [];
                 athletes = athletes.filter(a => tournamentAthleteIds.includes(a.id));
+            }
+
+            // Фильтр по весовой категории (как в сетке) + заполнение списка весов
+            const wFilter = document.getElementById('weighin-filter-weight')?.value || '';
+            const wSel = document.getElementById('weighin-filter-weight');
+            if (wSel) {
+                const curW2 = wSel.value || '';
+                const opts2 = ['<option value="">Все весовые категории</option>'];
+                const seen2 = {};
+                const catArr2 = athletes.map(a => {
+                    if (!a.weight) return null;
+                    const g2 = this._normGender(a.gender);
+                    const wS2 = Number.isInteger(Number(a.weight)) ? String(Number(a.weight)) : String(Number(a.weight));
+                    return `${g2} ${wS2} кг`;
+                }).filter(Boolean);
+                catArr2.forEach(key2 => { if (!seen2[key2]) { seen2[key2] = 1; opts2.push(`<option value="${this.escapeHtml(key2)}">${this.escapeHtml(key2)}</option>`); } });
+                opts2.sort((x, y) => x.localeCompare(y, 'ru'));
+                wSel.innerHTML = opts2.join('');
+                if (curW2) wSel.value = curW2;
+            }
+            // Применяем фильтр веса
+            if (wFilter) {
+                athletes = athletes.filter(a => {
+                    if (!a.weight) return false;
+                    const g3 = this._normGender(a.gender);
+                    const wS3 = Number.isInteger(Number(a.weight)) ? String(Number(a.weight)) : String(Number(a.weight));
+                    return `${g3} ${wS3} кг` === wFilter;
+                });
             }
 
             // Применяем поиск и фильтр
@@ -2449,6 +2596,14 @@ setupExport() {
     // ==================== СОРЕВНОВАНИЯ ====================
 
     setupTournamentForm() {
+        // Форма редактирования соревнования (модальное окно)
+        const editForm = document.getElementById('edit-tournament-form');
+        if (editForm) {
+            editForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await this.submitEditTournament();
+            });
+        }
         document.getElementById('tournament-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const name = document.getElementById('tournament-name').value.trim();
@@ -2541,15 +2696,15 @@ setupExport() {
                     </div>
                     <div>
                         <button class="btn-secondary" onclick="App.setDefaultTournament(${t.id})">${isDefault ? '⭐ Уже по умолчанию' : '⬇ По умолчанию'}</button>
-                        <button class="btn-secondary" onclick="App.editTournament(${t.id})">✏️ Редактировать</button>
+                        <button class="btn-secondary" onclick="App.openEditTournament(${t.id})">✏️ Редактировать</button>
                         <button class="btn-secondary" onclick="App.manageParticipants(${t.id})">👥 Участники</button>
-                        <button class="btn-secondary" onclick="App.editJudges(${t.id})">⚖️ Судьи</button>
-                        <button class="btn-secondary" onclick="App.exportTournamentToExcel(${t.id})">📊 Excel</button>
-                        <button class="btn-secondary" onclick="App.exportProtocolToExcel(${t.id})">📤 Протокол</button>
-                        <button class="btn-secondary" onclick="App.exportTournamentXml(${t.id})">📦 Экспорт XML</button>
+                        <button class="btn-secondary" style="display:none;" onclick="App.editJudges(${t.id})">⚖️ Судьи</button>
+                        <button class="btn-secondary" style="display:none;" onclick="App.exportTournamentToExcel(${t.id})">📊 Excel</button>
+                        <button class="btn-secondary" style="display:none;" onclick="App.exportProtocolToExcel(${t.id})">📤 Протокол</button>
+                        <button class="btn-secondary" style="display:none;" onclick="App.exportTournamentXml(${t.id})">📦 Экспорт XML</button>
                         <button class="btn-secondary" onclick="App.downloadJudgeReport(${t.id})">📄 Отчёт гл. судьи</button>
-                        <button class="btn-secondary" onclick="App.downloadPairs(${t.id}, ${t.days || 1}, '${t.date_from || ''}', '${t.date_to || ''}')">🤼 Состав пар</button>
-                        <button class="btn-secondary" onclick="App.downloadGrso(${t.id})">📈 Протокол графиков</button>
+                        <button class="btn-secondary" style="display:none;" onclick="App.downloadPairs(${t.id}, ${t.days || 1}, '${t.date_from || ''}', '${t.date_to || ''}')">🤼 Состав пар</button>
+                        <button class="btn-secondary" style="display:none;" onclick="App.downloadGrso(${t.id})">📈 Протокол графиков</button>
                         <button class="btn-secondary" style="color: #ff6b6b;" onclick="App.clearParticipants(${t.id})">🗑 Очистить участников</button>
                         <button class="btn-secondary" onclick="App.deleteTournament(${t.id})">❌ Удалить соревнование</button>
                     </div>
@@ -2577,37 +2732,58 @@ setupExport() {
         await this.renderTournaments();
     },
 
-    async editTournament(id) {
+    // Открывает модальное окно редактирования соревнования с заполненными полями
+    async openEditTournament(id) {
         try {
             const t = await API.getTournament(id);
-            const newName = prompt('Название соревнования:', t.name || '');
-            if (newName === null || !String(newName).trim()) return;
-            const newFrom = prompt('Дата начала (ГГГГ-ММ-ДД):', t.date_from || '');
-            if (newFrom === null) return;
-            const newTo = prompt('Дата окончания (ГГГГ-ММ-ДД):', t.date_to || t.date_from || '');
-            if (newTo === null) return;
-            const newDays = prompt('Число дней турнира (1-14):', t.days || 1);
-            if (newDays === null) return;
-            const newStep = prompt('Шаг веса (кг):', t.weight_step || 5);
-            if (newStep === null) return;
-            const chiefReferee = prompt('Главный судья:', t.chief_referee || '');
-            if (chiefReferee === null) return;
-            const chiefSecretary = prompt('Главный секретарь:', t.chief_secretary || '');
-            if (chiefSecretary === null) return;
-            const venue = prompt('Место проведения:', t.venue || '');
-            if (venue === null) return;
+            this._editingTournamentId = id;
+            const $ = (el) => document.getElementById(el);
+            $('edit-tournament-name').value = t.name || '';
+            $('edit-tournament-date-from').value = t.date_from || '';
+            $('edit-tournament-date-to').value = t.date_to || t.date_from || '';
+            $('edit-tournament-chief-referee').value = t.chief_referee || '';
+            $('edit-tournament-chief-secretary').value = t.chief_secretary || '';
+            $('edit-tournament-venue').value = t.venue || '';
+            document.getElementById('edit-tournament-modal').style.display = 'flex';
+        } catch (err) {
+            toast('Ошибка открытия: ' + err.message, 'error');
+        }
+    },
 
+    closeEditTournament() {
+        const m = document.getElementById('edit-tournament-modal');
+        if (m) m.style.display = 'none';
+        this._editingTournamentId = null;
+    },
+
+    // Сохраняет изменённые поля соревнования через PUT /tournaments/:id
+    async submitEditTournament() {
+        const id = this._editingTournamentId;
+        if (!id) { this.closeEditTournament(); return; }
+        const $ = (el) => document.getElementById(el);
+        const name = $('edit-tournament-name').value.trim();
+        const dateFrom = $('edit-tournament-date-from').value;
+        if (!name || !dateFrom) { toast('Заполните название и дату!'); return; }
+        const dateTo = $('edit-tournament-date-to').value;
+        let days = 1;
+        if (dateFrom && dateTo) {
+            const d1 = new Date(dateFrom);
+            const d2 = new Date(dateTo);
+            const diff = Math.round((d2 - d1) / 86400000) + 1;
+            if (diff > 0) days = Math.min(diff, 14);
+        }
+        try {
             await API.updateTournament(id, {
-                name: String(newName).trim(),
-                date_from: String(newFrom).trim(),
-                date_to: String(newTo).trim(),
-                days: parseInt(newDays) || 1,
-                weight_step: parseFloat(newStep) || 5,
-                chief_referee: String(chiefReferee).trim(),
-                chief_secretary: String(chiefSecretary).trim(),
-                venue: String(venue).trim(),
+                name,
+                date_from: dateFrom,
+                date_to: dateTo || dateFrom,
+                days,
+                chief_referee: $('edit-tournament-chief-referee').value.trim(),
+                chief_secretary: $('edit-tournament-chief-secretary').value.trim(),
+                venue: $('edit-tournament-venue').value.trim(),
             });
             toast('✅ Соревнование обновлено', 'success');
+            this.closeEditTournament();
             await this.renderTournaments();
             await this.renderBracketSelect();
             await this.renderResultsSelect();
@@ -2976,14 +3152,25 @@ setupExport() {
         const grsoBtn = document.getElementById('grso-download-btn');
         const genderFilter = document.getElementById('lottery-gender-filter');
         if (saveBtn) saveBtn.style.display = '';
+        // Заполняем select фильтра весовых категорий жеребьёвки
+        const lotWFilter = document.getElementById('lottery-filter-weight');
+        if (lotWFilter) {
+            const curWl = lotWFilter.value || '';
+            const wopts = ['<option value="">Все весовые категории</option>'];
+            Object.keys(lotteryResults).forEach(wc2 => {
+                wopts.push(`<option value="${this.escapeHtml(wc2)}">${this.escapeHtml(wc2)}</option>`);
+            });
+            lotWFilter.innerHTML = wopts.join('');
+            if (curWl) lotWFilter.value = curWl;
+            if (!lotWFilter.dataset.bound) {
+                lotWFilter.dataset.bound = '1';
+                lotWFilter.addEventListener('change', () => this.setLotteryGender(this._lotteryGender || ''));
+            }
+        }
         if (pairsBtn) {
             pairsBtn.style.display = '';
             pairsBtn.onclick = () => this.downloadPairs(tournamentId,
                 tournament.days, tournament.date_from, tournament.date_to);
-        }
-        if (grsoBtn) {
-            grsoBtn.style.display = '';
-            grsoBtn.onclick = () => this.downloadGrso(tournamentId);
         }
         if (genderFilter) genderFilter.style.display = 'flex';
 
@@ -3005,17 +3192,20 @@ setupExport() {
 
     /* Строит HTML-список жеребьёвки с учётом фильтра по полу.
        День бойца выводится простой надписью (без выпадающего меню). */
-    _lotteryHtml(tournament, lotteryResults, daysCount, genderFilter) {
+    _lotteryHtml(tournament, lotteryResults, daysCount, genderFilter, weightFilter) {
         const tournamentId = tournament.id;
         // Панель переключателя пола вынесена на панель управления (#lottery-gender-filter),
         // здесь рендерим только сам список категорий.
         let html = '';
+        let shownAthletes = 0;
         Object.entries(lotteryResults).forEach(([weightClass, athletes]) => {
             // Определяем пол категории по первому слову названия («мужской …» / «женский …»),
             // нормализуем, чтобы распознавать и «жен», «муж» и т.п.
             const wcGender = String(weightClass).match(/^([а-яА-ЯёЁ]+)\s/);
             const catGender = wcGender ? this._normGender(wcGender[1]) : '';
             if (genderFilter && catGender !== genderFilter) return;
+            if (weightFilter && weightClass !== weightFilter) return;
+            shownAthletes += (athletes || []).length;
             html += `<div class="lottery-category">
                 <h3 class="weight-title">${this.escapeHtml(weightClass)}</h3>
                 <table class="lottery-table">
@@ -3052,16 +3242,49 @@ setupExport() {
             </div>`;
         });
         // Кнопка сохранения теперь на панели управления (#save-lottery-btn)
+        html += `<div class="info" style="margin:10px 0;"><strong>По фильтру: ${shownAthletes} спортсменов</strong></div>`;
         return html;
     },
 
     // Установить фильтр пола для списка жеребьёвки ('' = все, 'мужской', 'женский')
+    // Фильтр пола в «Сетка» кнопками-табами ('' = все, 'мужской', 'женский')
+    setBracketGender(g) {
+        this._bracketGender = g || '';
+        // Подсветка активной кнопки
+        const bcont = document.getElementById('tab-bracket');
+        if (bcont) {
+            bcont.querySelectorAll('.bracket-gender-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.gender === (g || 'all'));
+            });
+        }
+        // Перерисовка сетки текущего турнира
+        const bsel = document.getElementById('bracket-tournament-select');
+        const bid = bsel ? parseInt(bsel.value) : 0;
+        if (bid) {
+            API.getTournament(bid).then(t => this.renderBracket(t)).catch(()=>{});
+        }
+    },
+
+// Фильтр пола в «Участники» кнопками-табами ('' = все, 'мужской', 'женский')
+    setParticipantsGender(g) {
+        this._participantsGender = g || '';
+        // Подсветка активной кнопки
+        const cont = document.getElementById('tab-participants');
+        if (cont) {
+            cont.querySelectorAll('.participants-gender-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.gender === (g || 'all'));
+            });
+        }
+        this.renderParticipants();
+    },
+
     setLotteryGender(g) {
         this._lotteryGender = g;
         const results = document.getElementById('lottery-results');
         if (results && this._ltTournament && this._ltLottery) {
             const daysCount = this._ltDays || 1;
-            results.innerHTML = this._lotteryHtml(this._ltTournament, this._ltLottery, daysCount, g);
+            const wFilter = document.getElementById('lottery-filter-weight')?.value || '';
+            results.innerHTML = this._lotteryHtml(this._ltTournament, this._ltLottery, daysCount, g, wFilter);
             // Подсветка кнопок пола на панели управления (#lottery-gender-filter)
             const filter = document.getElementById('lottery-gender-filter');
             if (filter) {
@@ -3590,7 +3813,6 @@ setupExport() {
                 });
 
                 // Перерисовка сетки при изменении фильтров (пол / весовая категория)
-                const fg = document.getElementById('bracket-filter-gender');
                 const fw = document.getElementById('bracket-filter-weight');
                 const applyFilters = async () => {
                     const id = parseInt(select.value);
@@ -3598,10 +3820,6 @@ setupExport() {
                     const tournament = await API.getTournament(id);
                     await this.renderBracket(tournament);
                 };
-                if (fg && !fg.dataset.initialized) {
-                    fg.dataset.initialized = 'true';
-                    fg.addEventListener('change', applyFilters);
-                }
                 if (fw && !fw.dataset.initialized) {
                     fw.dataset.initialized = 'true';
                     fw.addEventListener('change', applyFilters);
@@ -3674,6 +3892,13 @@ setupExport() {
     async renderBracket(tournament) {
         const container = document.getElementById('bracket-container');
         if (!container) return;
+        // Подсветка активной кнопки фильтра пола в сетке
+        const bcont = document.getElementById('tab-bracket');
+        if (bcont) {
+            bcont.querySelectorAll('.bracket-gender-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.gender === ((this._bracketGender || '') || 'all'));
+            });
+        }
 
         // Возвращает ID бойца из объекта слота или числового id
         const fid = (x) => (x && typeof x === 'object') ? x.athlete_id : x;
@@ -3721,18 +3946,13 @@ setupExport() {
             });
 
             // Фильтры по полу и весовой категории (два выпадающих меню)
-            const fgEl = document.getElementById('bracket-filter-gender');
             const fwEl = document.getElementById('bracket-filter-weight');
-            // Восстанавливаем выбор фильтров из текущего сеанса
-            if (fgEl) {
-                const sg = this._sessionGet('bracket-filter-gender');
-                if (sg && sg !== 'null') fgEl.value = sg;
-            }
+            // Фильтр пола теперь кнопками-табами (this._bracketGender), вес — select
             if (fwEl) {
                 const sw = this._sessionGet('bracket-filter-weight');
                 if (sw && sw !== 'null') fwEl.value = sw;
             }
-            const filterGender = fgEl ? (fgEl.value || '') : '';
+            const filterGender = this._bracketGender || '';
             const filterWeight = fwEl ? (fwEl.value || '') : '';
 
             // Заполняем выпадающий список весовых категорий (один раз на рендер проверки актуальности)
@@ -4173,6 +4393,13 @@ for (const weightClass of filteredWeightClasses) {
                 activeDay = dayTabsEl.querySelector('.day-tab.active')?.dataset.day || String(orderedDays[0]);
             }
 
+            // Кнопка «Протокол графиков» в сетке (перенесена из жеребьёвки)
+            const grsoBtn = document.getElementById('grso-download-btn');
+            if (grsoBtn) {
+                grsoBtn.style.display = '';
+                grsoBtn.onclick = () => this.downloadGrso(tournament.id);
+            }
+
             let panels = '';
             orderedDays.forEach((d, i) => {
                 const day = daysMap[d] || emptyDay;
@@ -4429,15 +4656,38 @@ for (const weightClass of filteredWeightClasses) {
         const rounds = [];
         let firstRound = [];
         let pairIndex = 0;
-        for (let i = 0; i < slots.length - 1; i += 2) {
-            firstRound.push({ a1: slots[i], a2: slots[i + 1], pairIndex: pairIndex, result: resultsMap[`${wc}|${pairIndex}`] || null, day: 1 });
-            pairIndex++;
-        }
-        if (slots.length % 2 !== 0) {
-            firstRound.push({ a1: slots[slots.length - 1], a2: null, pairIndex: null, result: { winner_id: slots[slots.length - 1].athlete_id, method: 'авто' }, day: 1 });
+        const N = slots.length;
+
+        // Для НЕчётного числа — строим как раньше (пары по 2 + один бай), схеме X-Б7
+        // обрабатывает ветка ниже. Для чётного НЕ-степени-двойки (6,10,12,...) —
+        // в 1-м раунде часть бойцов получает бай, чтобы далее каждый раунд был
+        // степенью двойки и полуфиналы формировались полностью.
+        const isPow2 = (N & (N - 1)) === 0;
+        if (N % 2 === 0 && !isPow2) {
+            // Чётное не-степень-двойки: достраиваем баями до степени двойки.
+            let roundsCount = 0; { let x = N; while (x > 1) { x = Math.ceil(x / 2); roundsCount++; } }
+            const halfPow = Math.pow(2, roundsCount - 1);
+            const playInR1 = 2 * (N - halfPow); // сколько играют в 1-м раунде
+            // Пары 1-го раунда (первые playInR1 участников), баи у остальных
+            for (let i = 0; i < playInR1 - 1; i += 2) {
+                firstRound.push({ a1: slots[i], a2: slots[i + 1], pairIndex: pairIndex, result: resultsMap[`${wc}|${pairIndex}`] || null, day: 1 });
+                pairIndex++;
+            }
+            for (let i = playInR1; i < N; i++) {
+                firstRound.push({ a1: slots[i], a2: null, pairIndex: null, result: { winner_id: slots[i].athlete_id, method: 'авто' }, day: 1 });
+            }
+        } else {
+            // Степень двойки или нечётное: пары по 2 (и один бай для нечётного)
+            for (let i = 0; i < N - 1; i += 2) {
+                firstRound.push({ a1: slots[i], a2: slots[i + 1], pairIndex: pairIndex, result: resultsMap[`${wc}|${pairIndex}`] || null, day: 1 });
+                pairIndex++;
+            }
+            if (N % 2 !== 0) {
+                firstRound.push({ a1: slots[N - 1], a2: null, pairIndex: null, result: { winner_id: slots[N - 1].athlete_id, method: 'авто' }, day: 1 });
+            }
         }
         rounds.push(firstRound);
-        const byeSlot = (slots.length % 2 !== 0) ? slots[slots.length - 1] : null;
+        const byeSlot = (N % 2 !== 0) ? slots[N - 1] : null;
         const totalRounds = Math.max(1, Math.round(Math.log2(slots.length)));
         const winnerOf = (f) => {
             if (!f || !f.result || f.result.winner_id == null) return null;
@@ -4513,7 +4763,7 @@ for (const weightClass of filteredWeightClasses) {
             return rounds;
         }
 
-        // Чётное число бойцов: обычные статические раунды
+        // Чётное число бойцов: обычные статические раунды (все пары в 1-м раунде)
         let roundNum2 = 2;
         while (roundNum2 <= totalRounds) {
             const prev = rounds[rounds.length - 1];
@@ -5121,12 +5371,203 @@ async advanceWinner(tournamentId, fight, winnerId) {
 
     // ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
 
+    // Выгрузка «Протокола победителей» в PDF (посадка данных по образцу ppp.pdf)
+    async exportWinnersPdf() {
+        try {
+            const sel = document.getElementById('results-tournament-select');
+            const tid = parseInt(sel && sel.value);
+            if (!tid) { toast('Сначала выберите соревнование', 'error'); return; }
+            const tournament = await API.getTournament(tid);
+            const athletes = await API.getAthletes();
+            const idName = {}; athletes.forEach(a => idName[a.id] = a);
+            const fid = (x) => (x && typeof x === 'object') ? x.athlete_id : x;
+            const [lottery, results] = await Promise.all([
+                API.getLottery(tid).catch(() => ({})),
+                API.getBracketResults(tid).catch(() => [])
+            ]);
+            const resultsMap = {};
+            (Array.isArray(results) ? results : []).forEach(r => resultsMap[`${r.weight_class}|${r.pair_index}`] = r);
+            const sortedWc = Object.keys(lottery).sort((a, b) => {
+                const ga = a.split(' ')[0], gb = b.split(' ')[0];
+                const wa = (a.match(/(\d+(?:\.\d+)?)/) || [0, 999])[1];
+                const wb = (b.match(/(\d+(?:\.\d+)?)/) || [0, 999])[1];
+                return (ga !== gb) ? ga.localeCompare(gb) : (parseFloat(wa) - parseFloat(wb));
+            });
+
+            // Вычисление мест категории: 1, 2, 3, 3, 5 x N
+            const medallists = [];
+            for (const wc of sortedWc) {
+                const slots = [...(lottery[wc] || [])].sort((a, b) => a.slot - b.slot);
+                if (slots.length < 2) continue;
+                const rounds = this._buildTreeRounds(slots, resultsMap, fid, wc);
+                const top = rounds[rounds.length - 1];
+                const topWinners = top.map(f => f.result ? f.result.winner_id : null);
+                const anyUnresolved = rounds.some(r => r.some(f => f.a2 !== null && !f.result));
+                let champion = null;
+                if (!anyUnresolved && topWinners.length === 1 && topWinners[0] != null) champion = topWinners[0];
+                if (champion == null) continue;
+
+                const put = [];
+                const loserOf = (f) => {
+                    if (!f || !f.result || f.a2 === null) return null;
+                    const la = fid(f.a1), lb = fid(f.a2);
+                    return (f.result.winner_id === la) ? lb : la;
+                };
+                // 1 место — чемпион
+                put.push({ place: 1, id: champion });
+                // 2 место — проигравший финала
+                const fp = rounds[rounds.length - 1][0];
+                const silv = loserOf(fp);
+                if (silv != null && silv !== champion) put.push({ place: 2, id: silv });
+                // 3 место x2 — проигравшие полуфинала (максимум 2 бронзы, как в боксе)
+                const semi = rounds[rounds.length - 2];
+                const bronzList = [];
+                if (semi) for (const sp of semi) {
+                    const l = loserOf(sp);
+                    if (l != null && l !== champion && bronzList.length < 2) bronzList.push(l);
+                }
+                bronzList.forEach(id => put.push({ place: 3, id }));
+                // 5 место xN — все остальные участники категории, кроме призёров (бронзы/серебро/золото)
+                const awarded = new Set([champion, silv, ...bronzList].filter(v => v != null));
+                const fifthList = [];
+                for (const s of slots) {
+                    const sid = fid(s);
+                    if (!awarded.has(sid)) fifthList.push(sid);
+                }
+                fifthList.forEach(id => put.push({ place: 5, id }));
+                // Уникальные спортсмены, сохраняя порядок мест
+                const seen = new Set(); const unique = [];
+                for (const p of put) { if (!seen.has(p.id)) { seen.add(p.id); unique.push(p); } }
+                if (unique.length) medallists.push({ wc, entries: unique.map(p => ({ ...p, a: idName[p.id] })) });
+            }
+
+            if (!medallists.length) { toast('Нет завершённых категорий для протокола', 'error'); return; }
+
+            // Генерация PDF (нативный jsPDF + autoTable)
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            try { await doc.addFont('/DejaVuSans.ttf', 'DejaVu', 'normal'); } catch (e) { }
+            try { await doc.addFont('/DejaVuSans-Bold.ttf', 'DejaVu', 'bold'); } catch (e) { }
+            try { doc.setFont('DejaVu', 'normal'); } catch (e) { }
+
+            // В образце ppp.pdf НЕТ шапки с названиями колонок — сразу идут данные призёров.
+            // Вес стоит объединённой ячейкой слева на каждую категорию, строки призёров
+            // разделены тонкими линиями, вертикальные линии — границы колонок.
+            const body = [];
+            const weightBlocks = [];
+            medallists.forEach(cat => {
+                weightBlocks.push({ wc: cat.wc });
+                cat.entries.forEach((en, idx) => {
+                    const a = en.a || {};
+                    body.push([
+                        '',
+                        (en.place != null ? en.place + ' место' : ''),
+                        a.name || ('#' + en.id),
+                        a.birth_year ? String(a.birth_year) : '',
+                        this.shortRank(a.rank),
+                        a.region || '',
+                        a.coach || ''
+                    ]);
+                });
+            });
+
+            doc.autoTable({
+                startY: 14,
+                body: body,
+                styles: { font: 'DejaVu', fontSize: 3.2, cellPadding: 0.4, textColor: [0, 0, 0] },
+                alternateRowStyles: { fillColor: [255, 255, 255] },
+                theme: 'plain',
+                margin: { left: 14, right: 14 },
+                columnStyles: {
+                    0: { cellWidth: 55 },
+                    1: { cellWidth: 13 },
+                    2: { cellWidth: 48 },
+                    3: { cellWidth: 10 },
+                    4: { cellWidth: 14 },
+                    5: { cellWidth: 22 },
+                    6: { cellWidth: 20 }
+                },
+                // Рисуем периметр блоков категорий и вес по центру каждого блока
+                didDrawPage: function (data) {
+                    const t = data.table;
+                    const rows = t.body || [];
+                    const cellArr = (r) => Object.values(r.cells || {})
+                        .sort((a, b) => (a.x || 0) - (b.x || 0));
+                    let block = null;
+                    let wi = 0;
+                    const flush = (d) => {
+                        if (!d) return;
+                        const left = d.left, top = d.top, right = d.right, bottom = d.bottom;
+                        doc.setDrawColor(0, 0, 0);
+                        doc.setLineWidth(0.2);
+                        doc.rect(left, top, right - left, bottom - top);
+                        // Вес по центру блока
+                        const wc = weightBlocks[wi++];
+                        if (wc && d.colw > 0 && bottom > top) {
+                            const lines = doc.splitTextToSize(wc.wc, d.colw - 3);
+                            const lh = 4.5;
+                            const cy = (top + bottom) / 2;
+                            doc.setFont('DejaVu', 'bold');
+                            doc.setFontSize(3.4);
+                            doc.setTextColor(0, 0, 0);
+                            const cxm = left + d.colw / 2;
+                            for (let i = 0; i < lines.length; i++) {
+                                const line = lines[i];
+                                const half = doc.getTextWidth(line) / 2;
+                                doc.text(line, cxm - half, cy - (lines.length - 1) * lh / 2 + i * lh);
+                            }
+                            doc.setFont('DejaVu', 'normal');
+                            doc.setFontSize(8);
+                        }
+                    };
+                    for (const r of rows) {
+                        const arr = cellArr(r);
+                        const placeCol = r.cells[1] ? (r.cells[1].raw || '').toString() : '';
+                        const isCatStart = placeCol.indexOf('1 место') >= 0;
+                        if (isCatStart) {
+                            if (block) flush(block);
+                            block = {
+                                left: 14, colw: 55,
+                                top: arr[0].y, right: 0, bottom: 0
+                            };
+                        }
+                        if (block) {
+                            const last = arr[arr.length - 1];
+                            if (last) {
+                                block.right = Math.max(block.right, last.x + last.width);
+                                block.bottom = Math.max(block.bottom, last.y + last.height);
+                            }
+                        }
+                    }
+                    flush(block);
+                }
+            });
+
+            // Сохраняем PDF
+            doc.save(`protocol_winners_${tid}.pdf`);
+            toast('📄 Протокол победителей сохранён', 'success');
+        } catch (err) {
+            console.error(err);
+            toast('Ошибка формирования протокола: ' + err.message, 'error');
+        }
+    },
+
     // Дата YYYY-MM-DD -> ДД.ММ.ГГГГ
     fmtDate(s) {
         if (!s) return s;
         const str = String(s);
         const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
         return m ? `${m[3]}.${m[2]}.${m[1]}` : str;
+    },
+
+    // Сокращает разряд: "1 юн. разряд" -> "1 ю.р.", "2 юн. разряд" -> "2 ю.р.",
+    // "1 разряд" -> "1 р."; КМС/МС и т.п. остаются как есть.
+    shortRank(r) {
+        if (!r) return '';
+        const s = String(r).trim();
+        const d = (s.match(/^\d+/) || [''])[0];
+        if (!d) return s;
+        return /юн/i.test(s) ? `${d} ю.р.` : `${d} р.`;
     },
 
     escapeHtml(text) {

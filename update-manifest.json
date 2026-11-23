@@ -12,6 +12,13 @@
     "update-manifest.json",
     "reglament_tmp.docx",
     "grso_tmp.docx",
+    "ppp_tmp.docx",
+    "ppp2_template.docx",
+    "pkdrk_template.docx",
+    "DejaVuSans.ttf",
+    "DejaVuSans-Bold.ttf",
+    "jspdf.umd.min.js",
+    "jspdf.plugin.autotable.min.js",
     "boxingapp.exe"
   ]
 }
