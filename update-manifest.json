@@ -1,25 +1,25 @@
-{
-  "version": "1.0.108",
-  "files": [
-    "app.js",
-    "index.html",
-    "style.css",
-    "login.html",
-    "server.py",
-    "database.py",
-    "app.py",
-    "requirements.txt",
-    "update-manifest.json",
-    "reglament_tmp.docx",
-    "grso_tmp.docx",
-    "ppp_tmp.docx",
-    "ppp2_template.docx",
-    "pkdrk_template.docx",
-    "participants_tmp.docx",
-    "DejaVuSans.ttf",
-    "DejaVuSans-Bold.ttf",
-    "jspdf.umd.min.js",
-    "jspdf.plugin.autotable.min.js",
-    "boxingapp.exe"
-  ]
+﻿{
+    "version":  "1.0.109",
+    "files":  [
+                  "app.js",
+                  "index.html",
+                  "style.css",
+                  "login.html",
+                  "server.py",
+                  "database.py",
+                  "app.py",
+                  "requirements.txt",
+                  "update-manifest.json",
+                  "reglament_tmp.docx",
+                  "grso_tmp.docx",
+                  "ppp_tmp.docx",
+                  "ppp2_template.docx",
+                  "pkdrk_template.docx",
+                  "participants_tmp.docx",
+                  "DejaVuSans.ttf",
+                  "DejaVuSans-Bold.ttf",
+                  "jspdf.umd.min.js",
+                  "jspdf.plugin.autotable.min.js",
+                  "boxingapp.exe"
+              ]
 }

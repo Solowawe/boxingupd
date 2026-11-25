@@ -2001,6 +2001,17 @@ def update_apply():
                 exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False) else str(app_dir)
                 upd_dir = os.path.join(exe_dir, 'update')
                 os.makedirs(upd_dir, exist_ok=True)
+                # Удаляем старые exe из папки update/, чтобы не накапливались версии.
+                try:
+                    for _ob_name in os.listdir(upd_dir):
+                        _ob = _ob_name.lower()
+                        if (_ob.startswith('boxingapp_') and _ob.endswith('.exe')) or _ob == 'boxingapp_new.exe':
+                            try:
+                                os.remove(os.path.join(upd_dir, _ob_name))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
                 _ver = str(manifest.get('version', ''))
                 new_exe = os.path.join(upd_dir, f'boxingapp_{_ver}.exe' if _ver else 'boxingapp_new.exe')
                 with open(new_exe, 'wb') as f:
@@ -2147,6 +2158,17 @@ def update_local():
                     exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, 'frozen', False) else str(app_dir)
                     upd_dir = os.path.join(exe_dir, 'update')
                     os.makedirs(upd_dir, exist_ok=True)
+                    # Удаляем старые exe из папки update/, чтобы не накапливались версии.
+                    try:
+                        for _ob_name in os.listdir(upd_dir):
+                            _ob = _ob_name.lower()
+                            if (_ob.startswith('boxingapp_') and _ob.endswith('.exe')) or _ob == 'boxingapp_new.exe':
+                                try:
+                                    os.remove(os.path.join(upd_dir, _ob_name))
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
                     _ver = str(manifest.get('version', ''))
                     new_exe = os.path.join(upd_dir, f'boxingapp_{_ver}.exe' if _ver else 'boxingapp_new.exe')
                     with open(new_exe, 'wb') as fw:
@@ -3710,7 +3732,8 @@ def report_sostav_par(tournament_id):
         plist = []
         rno = 1
         for rd in _rounds:
-            for (a1, a2, win, method) in rd:
+            for f in rd:
+                a1 = f.get('a1'); a2 = f.get('a2'); win = f.get('r')
                 # Одиночный боец (BYE) попадает в состав, если в категории больше одного
                 # участника (он ждёт соперника/продвигается по сетке). Если спортсмен вообще
                 # один в категории — он автоматически победитель, ни с кем не боксирует,
@@ -3745,6 +3768,27 @@ def report_sostav_par(tournament_id):
             _fp = [pp for pp in _plist if pp[7] == _selected_day]
             if _fp:
                 _filtered[_wc] = _fp
+        pairs_by_wc = _filtered
+
+    # Фильтр по полу: ?gender=male|female (или мужской/женский). Если задан,
+    # оставляем только категории соответствующего пола.
+    _req_gender = ''
+    try:
+        _req_gender = (request.args.get('gender') or request.args.get('pol') or '').strip().lower()
+    except Exception:
+        _req_gender = ''
+    if _req_gender in ('male', 'мужской', 'м', '1'):
+        _want = 'мужской'
+    elif _req_gender in ('female', 'женский', 'ж', '2'):
+        _want = 'женский'
+    else:
+        _want = ''
+    if _want:
+        _filtered = OrderedDict()
+        for _wc, _plist in pairs_by_wc.items():
+            # пол категории — из первой пары (все пары категории одного пола)
+            if _plist and _plist[0][1] == _want:
+                _filtered[_wc] = _plist
         pairs_by_wc = _filtered
 
     # Группировка по полу (Юноши/Девушки) и годам

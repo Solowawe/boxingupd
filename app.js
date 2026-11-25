@@ -513,7 +513,15 @@ const App = {
     // Скачать «Состав пар» — показывает окно выбора дня из интервала дней турнира.
     // Число дней берём максимумом из поля days и фактического календарного
     // диапазона дат (date_from..date_to), как в остальных разделах приложения.
+    // Чекбоксы «Мужской»/«Женский» рядом с кнопкой фильтруют отчёт по полу
+    // (комбинируются с выбранным днём).
     downloadPairs(tournamentId, days, dateFrom, dateTo) {
+        // какой пол выбран (можно оба → без фильтра)
+        const gMale = document.getElementById('pairs-gender-male');
+        const gFemale = document.getElementById('pairs-gender-female');
+        const mOn = gMale ? gMale.checked : false;
+        const fOn = gFemale ? gFemale.checked : false;
+        this._pairsGender = (mOn && !fOn) ? 'male' : ((fOn && !mOn) ? 'female' : '');
         let daysFromDates = 1;
         if (dateFrom && dateTo) {
             const d = Math.floor((new Date(dateTo) - new Date(dateFrom)) / 86400000) + 1;
@@ -523,7 +531,7 @@ const App = {
         const modal = document.getElementById('pairs-day-modal');
         if (!modal) {
             // fallback: без модалки просто открываем все пары
-            window.open(`/api/report/${tournamentId}/sostav-par`, '_blank');
+            window.open(`/api/report/${tournamentId}/sostav-par${this._pairsGender ? '?gender=' + this._pairsGender : ''}`, '_blank');
             return;
         }
         document.getElementById('pairs-day-title').textContent = 'Выбор дня — состав пар';
@@ -541,7 +549,8 @@ const App = {
 
     // Открыть отчёт «Состав пар» за конкретный день (day=0 → все пары)
     openPairsDay(tournamentId, day) {
-        const q = day > 0 ? `?day=${day}` : '';
+        const g = this._pairsGender || '';
+        const q = (day > 0 ? `?day=${day}` : '') + (g ? ((day > 0 ? '&' : '?') + `gender=${g}`) : '');
         window.open(`/api/report/${tournamentId}/sostav-par${q}`, '_blank');
     },
 
@@ -3187,6 +3196,13 @@ setupExport() {
             pairsBtn.style.display = '';
             pairsBtn.onclick = () => this.downloadPairs(tournamentId,
                 tournament.days, tournament.date_from, tournament.date_to);
+        }
+        // Чекбоксы фильтра по полу рядом с кнопкой «Состав пар»
+        const gWrapMale = document.getElementById('pairs-gender-wrap');
+        const gWrapFemale = document.getElementById('pairs-gender-wrap2');
+        if (gWrapMale && gWrapFemale) {
+            gWrapMale.style.display = 'inline-flex';
+            gWrapFemale.style.display = 'inline-flex';
         }
         if (genderFilter) genderFilter.style.display = 'flex';
 

@@ -219,6 +219,12 @@
                         <button id="generate-lottery" class="btn-primary">🎲 Провести жеребьевку</button>
                         <button id="save-lottery-btn" class="btn-primary" style="display:none;" onclick="App.saveLotteryFromUI()">💾 Сохранить жеребьевку</button>
                         <button id="pairs-download-btn" class="btn-secondary" style="display:none;">🤼 Состав пар</button>
+                        <label id="pairs-gender-wrap" class="btn-secondary" style="display:none; align-items:center; gap:6px; padding:8px 12px; cursor:pointer; user-select:none;">
+                            <input type="checkbox" id="pairs-gender-male" style="width:auto; vertical-align:middle;"> Мужской
+                        </label>
+                        <label id="pairs-gender-wrap2" class="btn-secondary" style="display:none; align-items:center; gap:6px; padding:8px 12px; cursor:pointer; user-select:none;">
+                            <input type="checkbox" id="pairs-gender-female" style="width:auto; vertical-align:middle;"> Женский
+                        </label>
                     </div>
                     <div id="lottery-gender-filter" style="display:none; margin-top:10px; gap:8px; justify-content:center; flex-wrap:wrap;">
                         <button class="btn-secondary lottery-gender-tab active" data-gender="all" onclick="App.setLotteryGender('')">Все</button>
