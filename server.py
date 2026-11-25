@@ -1342,13 +1342,30 @@ def _simulate_calc_day(tournament_id, known=None):
     for wc in order:
         slots = groups[wc]
         rounds = _build_tree_rounds(slots, wc, _fid_act, known)
-        _max_rounds = len(rounds)
+        # Полное число раундов категории — сколько реально построил _build_tree_rounds.
+        # round_to_day сам клампит по числу дней, поэтому финал (последний раунд)
+        # попадает в последний день турнира. Нельзя использовать ceil(log2(N)):
+        # для не-степеней-двойки (10 и т.п.) дерево имеет больше раундов, чем ceil(log2),
+        # и финал выпадал бы за пределы дней.
+        _max_rounds = max(1, len(rounds))
         for rnd_idx, rnd in enumerate(rounds, start=1):
-            _rd_day = _round_to_day(rnd_idx, _max_rounds, _tdays)
+            round_num = rnd_idx
             for f in rnd:
                 if f['a1'] is None:
                     # участники пары ещё не определены (победитель прошлой пары неизвестен)
                     continue
+                # День пары — ТОЧНО как рендер сетки на клиенте (app.js renderBracket):
+                #   - 1-й раунд дерева (roundNum===1): день из жеребьёвки (max дней
+                #     участников), т.к. здесь реальные бойцы;
+                #   - бай (нечётный боец, a2=None) в 1-м раунде — день 2 (centerDay клиента);
+                #   - раунды 2+ — по номеру раунда round_to_day(roundNum, maxRounds, tdays).
+                if round_num == 1:
+                    if f['a2'] is None:
+                        _rd_day = min(_tdays, 2)
+                    else:
+                        _rd_day = max(min(_tdays, _day(f['a1'])), min(_tdays, _day(f['a2'])))
+                else:
+                    _rd_day = _round_to_day(round_num, _max_rounds, _tdays)
                 if f['a2'] is None:
                     pairs.append((wc, f['p'], f['a1'], None, _rd_day, True))
                 else:
@@ -2514,6 +2531,70 @@ def _build_tree_rounds(slots, wc, fid, results_map):
     """
     N = len(slots)
     is_pow2 = (N & (N - 1)) == 0
+
+    # ===== Классическая достройка до ближайшей степени двойки для N >= 9 =====
+    # Для больших категорий (9, 10, ... 16, 17, ...) сетка строится по классической
+    # олимпийской схеме: достраиваем баями до ближайшей степени двойки S. В первом
+    # раунде играют 2*(N - S/2) бойцов (пары), остальные — баи. Далее обычные
+    # раунды пар соседних победителей; баи авто-проходят. Полуфинал (предпоследний
+    # раунд) даёт 2 проигравших = 2 бронзы.
+    if N >= 9:
+        S = 1
+        while S < N:
+            S <<= 1
+        play_in = 2 * (N - S // 2)
+        first = []
+        pi = 0
+        i = 0
+        # пары играющих
+        while i < play_in - 1:
+            a1 = fid(slots[i]); a2 = fid(slots[i + 1])
+            first.append({'a1': a1, 'a2': a2, 'p': pi, 'r': results_map.get((wc, pi))})
+            pi += 1
+            i += 2
+        # баи (остальные бойцы) — авто-проход
+        for i in range(play_in, N):
+            aid = fid(slots[i])
+            first.append({'a1': aid, 'a2': None, 'p': None, 'r': aid})
+        rounds = [first]
+
+        def _winner_of(f):
+            if not f or f.get('r') in (None, 0):
+                return None
+            w = f['r']
+            if f.get('a1') is not None and f['a1'] == w:
+                return w
+            if f.get('a2') is not None and f['a2'] == w:
+                return w
+            return None
+
+        rn = 2
+        carry = []
+        while True:
+            prev = rounds[-1]
+            # победители ячеек (баи авто), + перенесённые
+            winners = [_winner_of(f) for f in prev]
+            all_ids = carry + winners
+            # убираем пустые (None - нереализованные баи старше? баи дают себя)
+            # Баи дают победителя (r=aid), поэтому winners содержат id. Переносим
+            # нечётный остаток.
+            cnt = len(all_ids)
+            if cnt <= 1:
+                break
+            off = (rn - 1) * 1000
+            nxt = []
+            pp = off
+            j = 0
+            while j + 1 < cnt:
+                nxt.append({'a1': all_ids[j], 'a2': all_ids[j + 1],
+                            'p': pp, 'r': results_map.get((wc, pp))})
+                pp += 1
+                j += 2
+            carry = [all_ids[-1]] if cnt % 2 != 0 else []
+            rounds.append(nxt)
+            rn += 1
+        return rounds
+
     first = []
     pi = 0
     # --- Первый раунд ---
@@ -2557,138 +2638,137 @@ def _build_tree_rounds(slots, wc, fid, results_map):
             return w
         return None
 
-    if bye_slot is not None:
-        # Нечётное число бойцов: схема X-Б7 (как на клиенте).
-        bye_id = fid(bye_slot)
-        day2 = []
-        w_first = winner_of(first[0])
-        w_first_no_bye = (w_first if (w_first is not None and w_first != bye_id) else None)
-        day2.append({'a1': w_first_no_bye, 'a2': bye_id, 'p': 1000, 'r': results_map.get((wc, 1000))})
-        rest = []
-        for i in range(1, len(first)):
-            w = winner_of(first[i])
-            if w is not None and w != bye_id:
-                rest.append(w)
-        si = 0
-        pidx = 1001
-        while si + 1 < len(rest):
-            day2.append({'a1': rest[si], 'a2': rest[si + 1], 'p': pidx, 'r': results_map.get((wc, pidx))})
-            pidx += 1
-            si += 2
-        if len(rest) % 2 != 0:
-            lone = rest[-1]
-            x_obj = winner_of(day2[0])
-            day2.append({'a1': x_obj, 'a2': lone, 'p': pidx, 'r': results_map.get((wc, pidx))})
-        rounds.append(day2)
-        rn = 3
+    def _finish(start_rn, carry):
+        """Достраивает раунды до финала. carry — победители, перенесённые из
+        предыдущего раунда без пары (нечётный остаток); они НЕ фигурируют в том раунде,
+        а первыми входят в следующий, где встречают победителя первой пары.
+        Раунды строятся по ЧИСЛУ ячеек (структура стабильна и не зависит от того,
+        решены ли бои) — победители подставляются по мере решения, иначе None."""
+        rn = start_rn
+        carry = list(carry or [])
         while True:
             prev = rounds[-1]
-            cnt = len(prev)
-            if rn == 3 and len(rest) % 2 != 0:
-                cnt -= 1
+            # победители ячеек текущего раунда (None, если бой не решён)
+            winners = [winner_of(f) for f in prev]
+            all_ids = carry + winners
+            cnt = len(all_ids)
             if cnt <= 1:
                 break
             off = (rn - 1) * 1000
             nxt = []
-            start_idx = 0
-            if rn == 3 and len(rest) % 2 != 0:
-                start_idx = 1
-            i = start_idx
-            while i + 1 < len(prev):
-                pp = off + ((i - start_idx) // 2)
-                nxt.append({'a1': winner_of(prev[i]), 'a2': winner_of(prev[i + 1]),
+            pp = off
+            i = 0
+            while i + 1 < cnt:
+                nxt.append({'a1': all_ids[i], 'a2': all_ids[i + 1],
                             'p': pp, 'r': results_map.get((wc, pp))})
+                pp += 1
                 i += 2
+            carry = [all_ids[-1]] if cnt % 2 != 0 else []
             rounds.append(nxt)
             rn += 1
         return rounds
 
-    # Чётное число бойцов: обычные сохраняющие раунды.
-    # Добавляем раунды, пока в последнем раунде больше одной пары — так
-    # любой N (в т.ч. не степень двойки, например 10) сходится к финалу.
-    rn = 2
-    while True:
-        prev = rounds[-1]
-        if len(prev) <= 1:
-            break
-        off = (rn - 1) * 1000
-        nxt = []
+    # Для НЕчётного числа бойцов — схема, совпадающая с клиентской «ёлкой»:
+    #   раунд 2 (день 2): победитель ПЕРВОЙ пары vs БАЙ (один поединок) + остальные
+    #                      победители попарно;
+    #   нечётный остаток победителей переносится в следующий раунд (не рисуется),
+    #   где встречает победителя пары p1000 — как в финале.
+    # Для чётного — обычная достройка до 1 пары.
+    if N % 2 != 0:
+        bye_id = fid(slots[N - 1])
+        w1 = winner_of(first[0])          # победитель первой пары
+        day2 = [{'a1': w1, 'a2': bye_id, 'p': 1000, 'r': results_map.get((wc, 1000))}]
+        others = []
+        for i in range(1, len(first)):
+            w = winner_of(first[i])
+            if w is not None and w != bye_id:
+                others.append(w)
+        pidx = 1001
         i = 0
-        while i + 1 < len(prev):
-            pp = off + (i // 2)
-            nxt.append({'a1': winner_of(prev[i]), 'a2': winner_of(prev[i + 1]),
-                        'p': pp, 'r': results_map.get((wc, pp))})
+        while i + 1 < len(others):
+            day2.append({'a1': others[i], 'a2': others[i + 1],
+                         'p': pidx, 'r': results_map.get((wc, pidx))})
+            pidx += 1
             i += 2
-        # если в предпоследнем раунде была нечётная пара бая — то в nxt уже
-        # может остаться «хвост»-бай (без пары). Добавляем его как пару с None.
-        if len(prev) % 2 != 0:
-            last = winner_of(prev[-1])
-            if last is not None:
-                nxt.append({'a1': last, 'a2': None, 'p': None, 'r': last})
-        rounds.append(nxt)
-        rn += 1
-    return rounds
+        carry = [others[-1]] if len(others) % 2 != 0 else []
+        rounds.append(day2)
+        return _finish(3, carry)
+
+    # Чётное число бойцов: достройка до 1 пары.
+    return _finish(2, [])
 
 
 def _build_weight_rounds(slots, results, step=5.0):
     """Строит раунды и определяет призёров для одной весовой категории.
 
-    Возвращает (rounds, champion_id, silver_id, [bronze_ids], names).
-    rounds = список раундов; each раунд = список (a1_id, a2_id, winner_id, method).
+    Использует _build_tree_rounds (та же схема достройки баями, что и на клиенте),
+    чтобы структура раундов совпадала с фронтендом. Это критично для корректного
+    определения бронзы: при 6,10,12... бойцах наивное «полуфинал = rounds[-2]»
+    ложно присваивало 3-е места проигравшим 1-го дня.
+
+    Возвращает (rounds, champion_id, silver_id, [bronze_ids]).
     """
-    # результаты по индексу пары
-    results_by_key = {}
+    results_map = {}
     for r in (results or []):
-        results_by_key[(r['weight_class'], r['pair_index'])] = r
+        results_map[(r['weight_class'], r['pair_index'])] = r['winner_id']
+    wc = slots[0]['weight_class'] if slots else ''
+    rounds = _build_tree_rounds(slots, wc, _fid_act, results_map)
 
-    rounds = []
-    fr = []
-    pidx = 0
-    for i in range(0, len(slots) - 1, 2):
-        a1 = slots[i]; a2 = slots[i + 1]
-        r = results_by_key.get((a1['weight_class'], pidx))
-        fr.append((_fid_act(a1), _fid_act(a2), r['winner_id'] if r else None, (r['method'] if r else '')))
-        pidx += 1
-    if len(slots) % 2 != 0:
-        a1 = slots[-1]
-        fr.append((_fid_act(a1), None, None, ''))  # ожидает соперника — не авто-победитель
-    rounds.append(fr)
-
-    round_num = 1
-    while True:
-        prev = rounds[-1]
-        winners = [f[2] for f in prev]
-        if any(w is None for w in winners) or len(winners) <= 1:
-            break
-        round_num += 1
-        offset = (round_num - 1) * 1000
-        nxt = []
-        for i in range(0, len(winners) - 1, 2):
-            a1 = winners[i]; a2 = winners[i + 1]
-            r = results_by_key.get((slots[0]['weight_class'], offset + i))
-            nxt.append((a1, a2, r['winner_id'] if r else None, (r['method'] if r else '')))
-        if not nxt:
-            break
-        rounds.append(nxt)
-
-    wc = slots[0]['weight_class']
     champion = None; silver = None; bronzes = []
+    if not rounds:
+        return rounds, champion, silver, bronzes
+
+    # Чемпион и серебро — из последнего раунда (финал).
     top = rounds[-1]
-    any_unresolved = any((f[1] is not None and f[2] is None) for rd in rounds for f in rd)
-    top_winner = None
-    if not any_unresolved and len(top) == 1 and top[0][2] is not None:
-        top_winner = top[0][2]
-    champion = top_winner
-    if champion is not None and len(top) == 1 and top[0][1] is not None:
-        silver = top[0][0] if top[0][2] == top[0][1] else top[0][1]
+    resolved_top = [f for f in top if f.get('a2') is not None and f.get('r') not in (None, 0)]
+    if len(resolved_top) == 1:
+        f = resolved_top[0]
+        if f['a1'] is not None and f['a2'] is not None:
+            champion = f['r'] if f['r'] in (f['a1'], f['a2']) else None
+            if champion is not None:
+                silver = f['a1'] if f['a2'] == champion else f['a2']
+
+    # Бронза = проигравшие ПОЛУФИНАЛА = предпоследний раунд ПОЛНОГО дерева.
+    # _build_tree_rounds строит дерево ТАК ЖЕ, как клиент buildFullRounds (до финала
+    # включительно, с достройкой баями), поэтому предпоследний раунд всегда является
+    # полуфиналом. Берём проигравших только из РЕШЁННЫХ пар этого раунда:
+    # пока полуфинал не сыгран, бронзы в протоколе нет (проигравшие 1-го раунда
+    # при 6,10,12... бойцах призёрами не становятся).
     if len(rounds) >= 2:
         semi = rounds[-2]
         for f in semi:
-            if f[1] is None or f[2] is None:
+            if f.get('a1') is None or f.get('a2') is None:
                 continue
-            loser = f[1] if f[2] == f[0] else f[0]
-            if loser is not None and loser != champion and len(bronzes) < 2:
+            if f.get('r') in (None, 0):
+                continue
+            loser = f['a1'] if f['a2'] == f['r'] else f['a2']
+            if loser is not None and loser != champion and loser != silver and len(bronzes) < 2:
                 bronzes.append(loser)
+
+    # Добор второй бронзы для НЕчётного N в нашей схеме (5 бойцов и подобные):
+    # в полуфинальном раунде (rounds[-2]) только ОДИН поединок (поб.первой пары vs бай),
+    # а победитель ВТОРОЙ пары перенесён напрямую в финал. Поэтому второй бронзовый
+    # призёр — проигравший во ВТОРОЙ паре 1-го раунда (p1): он выбыл на полуфинальной
+    # стадии, не пройдя в финал. Для N=7,9,11 полуфиналов в rounds[-2] несколько,
+    # и этот добор не срабатывает (уже 2 бронзы из полуфиналов).
+    N = len(slots)
+    if N % 2 != 0 and len(bronzes) < 2 and len(rounds) >= 2:
+        semi = rounds[-2]
+        # один полуфинал ПО СТРУКТУРЕ (одна пара в предпоследнем раунде) — схема
+        # для 5 бойцов. Проверяем структуру (len(semi)), а не решённость, чтобы
+        # 1-я бронза (проигравший 2-й пары 1-го раунда) появилась сразу после дня 1.
+        if len(semi) == 1:
+            # вторая (боевая) пара 1-го раунда — та, чей победитель ушёл в финал
+            first = rounds[0]
+            for f in first[1:]:          # пропускаем первую пару (её победитель в полуфинале)
+                if f.get('a1') is None or f.get('a2') is None:
+                    continue
+                if f.get('r') in (None, 0):
+                    continue
+                loser = f['a1'] if f['a2'] == f['r'] else f['a2']
+                if loser is not None and loser != champion and loser != silver and loser not in bronzes:
+                    bronzes.append(loser)
+                    break
     return rounds, champion, silver, bronzes
 
 
@@ -3962,6 +4042,11 @@ def report_sostav_par(tournament_id):
 def report_ppp(tournament_id):
     """Сформировать «Протокол победителей и призёров» на основе ppp2_template.docx.
 
+    Поддерживает ?mode=preview — «Предварительный протокол»: те же данные, что уже
+    сыграны (bracket_results), без доигрывания; то же имя файла, но подписан как
+    предварительный. Логика призёров остаётся прежней: бронза — сразу после
+    полуфиналов, чемпион/серебро — только после финала.
+
     Шаблон (ppp2_template.docx с гербами) содержит: две готовые таблицы с 7 колонками
     (юниорки/юниоры), в каждой — строка-шапка и БЛОК-прототип:
       - строка-вес «Весовая категория N КГ»,
@@ -4106,6 +4191,8 @@ def report_ppp(tournament_id):
     def _medallists(wc, slots):
         _rounds, champ, silver, bronzes = _build_weight_rounds(slots, results)
         put = []
+        # Бронза (3-е места) выводится СРАЗУ, как только сыграны полуфиналы,
+        # даже если ещё нет чемпиона/серебра — как и во вкладке «Результаты».
         if champ is not None:
             put.append((1, champ))
         if silver is not None and silver != champ:
@@ -4208,45 +4295,76 @@ def report_ppp(tournament_id):
             pass
 
     def _fill_table(tbl, gword, wcs):
-        """Заполняет одну таблицу призёрами выбранного пола (девушки/юноши)."""
+        """Заполняет одну таблицу призёрами выбранного пола (девушки/юноши).
+
+        Поддерживает ОБА формата шаблона:
+          - новый (табл0): блок «Весовая категория {vN} КГ» + 4 строки призёров
+            (1,2,3,3 место) без 5-го места; вес подставляется в маркер {vN};
+          - старый (табл1): «Весовая категория N КГ» (статичный текст) + строки
+            1,2,3,3,5; 5-е место отбрасывается.
+        Строки-призёры определяются по тексту (маркеры {ФИО} или «1 место»), а
+        строка-вес — по наличию «Весовая категория»/{vN}. Блоки клонируются.
+        """
         trs = tbl._tbl.findall(_qn('w:tr'))
-        if len(trs) < 7:
+        if len(trs) < 2:
             return
+
+        # Строка-вес = вторая строка (словарь-прототип)
         proto_weight = _copy.deepcopy(trs[1])
-        proto_rows = [_copy.deepcopy(trs[i]) for i in range(2, 6)]  # 1,2,3,3 место (без 5-го)
-        # удаляем строки кроме заголовка (row0)
+        # Строки призёров — все строки таблицы (кроме шапки row0 и строк-весов),
+        # содержащие маркеры {ФИО}. Из них берём первые 4 (1,2,3,3) — 5-е исключаются.
+        proto_rows = []
+        for tr in trs[1:]:
+            seg = tr
+            fulltext = ''.join((t.text or '') for t in seg.iter(_qn('w:t')))
+            if '{ФИО}' in fulltext or ('место' in fulltext and '{' in fulltext):
+                proto_rows.append(_copy.deepcopy(tr))
+        proto_rows = proto_rows[:4]  # максимум 1,2,3,3 (без 5-го)
+
+        # Извлекаем маркер веса из строки-веса. Шаблон может содержать:
+        #   {mv1}..{mv5}  — весовая категория МУЖСКОГО пола (таблица юношей);
+        #   {gv1}..{gv5} / { g v1}..{ g v5} — весовая категория ЖЕНСКОГО пола;
+        #   {v1} / {WEIGHT_CLASS} — устаревшие варианты.
+        # Маркер может быть разбит пробелами внутри (Word вставляет разрывы), поэтому
+        # нормализуем и ищем по подстроке вида «vN» внутри фигурных скобок.
+        _weight_marker = None
+        _wtext = ''.join((t.text or '') for t in proto_weight.iter(_qn('w:t')))
+        _wm = _re.search(r'\{[^}]*v\s*\d[^}]*\}', _wtext, _re.IGNORECASE)
+        if _wm:
+            _weight_marker = _wm.group(0)
+
+        # удаляем все строки кроме заголовка (row0)
         for tr in trs[1:]:
             tbl._tbl.remove(tr)
+
         for wc in wcs:
             _mm = _re.search(r'(\d+(?:\.\d+)?)', wc or '')
             weight = _mm.group(1) if _mm else ''
             med = _medallists(wc, groups[wc])
-            # вес-строка (ячейка объединена на всю ширину)
+            # вес-строка
             wrow = _copy.deepcopy(proto_weight)
             wcells = wrow.findall(_qn('w:tc'))
+            _wtxt = f'Весовая категория {weight} КГ'
             if wcells:
-                set_cell_text(wcells[0], f'Весовая категория {weight} КГ')
+                set_cell_text(wcells[0], _wtxt)
+            elif _weight_marker:
+                _replace_in_el(wrow, {_weight_marker: _wtxt})
             else:
-                _replace_in_el(wrow, {'{WEIGHT_CLASS}': f'Весовая категория {weight} КГ'})
+                _replace_in_el(wrow, {'{WEIGHT_CLASS}': _wtxt})
             tbl._tbl.append(wrow)
-            # строки призёров — до 4 (в шаблоне 1,2,3,3; без 5-го места)
-            for idx in range(len(proto_rows)):
+            # строки призёров — 1,2,3,3 (столько медалей есть в категории)
+            for idx in range(min(len(proto_rows), len(med))):
                 prow = _copy.deepcopy(proto_rows[idx])
                 cells = prow.findall(_qn('w:tc'))
-                place = ''; name = ''; dob = ''; rank = ''; region = ''; org = ''; code = ''
-                if idx < len(med):
-                    plaza, aid = med[idx]
-                    a = by_id.get(aid)
-                    place = f'{plaza} место'
-                    name = (a.get('name') or ('#' + str(aid))) if a else ('#' + str(aid))
-                    b = (a.get('birth_year') or '') if a else ''
-                    dob = str(b)  # только год рождения (данных о дне/месяце нет)
-                    rank = _short_rank(a.get('rank') or '') if a else ''
-                    region = (a.get('region') or '') if a else ''
-                    org = ''  # спорт организация не хранится
-                    code = ''  # спорт общ. не хранится
-                else:
-                    continue
+                plaza, aid = med[idx]
+                a = by_id.get(aid)
+                place = f'{plaza} место'
+                name = (a.get('name') or ('#' + str(aid))) if a else ('#' + str(aid))
+                dob = str((a.get('birth_year') or '') if a else '')
+                rank = _short_rank(a.get('rank') or '') if a else ''
+                region = (a.get('region') or '') if a else ''
+                org = ''
+                code = ''
                 if len(cells) >= 7:
                     set_cell_text(cells[0], place)
                     set_cell_text(cells[1], name)
@@ -4267,12 +4385,49 @@ def report_ppp(tournament_id):
     for (gword, yrange), wcs in _groups_sorted:
         gender_cats.setdefault(gword, []).extend(wcs)
 
+    # В предварительном режиме (?mode=preview) показываем ТОЛЬКО категории, где уже
+    # есть хоть один призёр — как во вкладке «Результаты» (там категории без медалей
+    # скрыты). Полный протокол (режим по умолчанию) выводит все категории.
+    _is_preview = (request.args.get('mode') or '').lower() == 'preview'
+    if _is_preview:
+        for _g in list(gender_cats.keys()):
+            gender_cats[_g] = [_wc for _wc in gender_cats[_g] if _medallists(_wc, groups[_wc])]
+
     # Две готовые таблицы: индекс 0 = юниорки(девушки), 1 = юниоры(юноши)
     tables = doc.tables
+    # В предварительном режиме таблицу пола, где после фильтрации не осталось ни одной
+    # категории с призёрами, НЕ выводим вовсе (удаляем из документа). Соберём ссылки
+    # на w:tbl заранее: после удаления первой таблицы индексы doc.tables сдвигаются.
+    _tbl_els = [t._tbl for t in tables]
+    def _remove_table(i):
+        """Удаляет таблицу и прилегающую к ней подпись «среди {ПОЛ} {в1}-{в2} ЛЕТ»
+        (абзац с маркерами ПОЛ/в1/в2, расположенный непосредственно выше таблицы),
+        чтобы в документе не оставалось незаполненного заголовка-прототипа."""
+        try:
+            tbl = _tbl_els[i]
+            parent = tbl.getparent()
+            # ищем ближайший предыдущий абзац с маркерами подписи и удаляем его
+            prev = tbl.getprevious()
+            while prev is not None:
+                if prev.tag == _qn('w:p'):
+                    _full = ''.join((t.text or '') for t in prev.iter(_qn('w:t')))
+                    if '{ПОЛ}' in _full or '{в1}' in _full or '{в2}' in _full:
+                        parent.remove(prev)
+                    break
+                elif prev.tag == _qn('w:tbl'):
+                    break
+                prev = prev.getprevious()
+            parent.remove(tbl)
+        except Exception:
+            pass
     if len(tables) >= 1 and gender_cats.get('Девушки'):
         _fill_table(tables[0], 'Девушки', gender_cats['Девушки'])
+    elif _is_preview and len(tables) >= 1:
+        _remove_table(0)
     if len(tables) >= 2 and gender_cats.get('Юноши'):
         _fill_table(tables[1], 'Юноши', gender_cats['Юноши'])
+    elif _is_preview and len(tables) >= 2:
+        _remove_table(1)
 
     # Возрастные подписи «среди {ПОЛ} {в1}-{в2} ЛЕТ»:
     #   {ПОЛ} — Девушки (1-я таблица) / Юноши (2-я таблица);
@@ -4315,10 +4470,12 @@ def report_ppp(tournament_id):
                      ('Юноши', tables[1] if len(tables) >= 2 else None)):
         if tab is None:
             continue
-        # ищем абзац-подпись с {ПОЛ}/{в1}/{в2}, расположенный перед этой таблицей
-        # в последовательности body (игнорируя другие таблицы)
         tbl_el = tab._tbl
         body_els = list(doc.element.body)
+        # Если таблица была удалена (в предварительном режиме — нет призёров),
+        # её элемента уже нет в body — пропускаем обработку подписи.
+        if tbl_el not in body_els:
+            continue
         ti = body_els.index(tbl_el)
         # ищем ближайший w:p выше по порядку (до предыдущей таблицы), содержащий маркеры
         found = False
@@ -4348,11 +4505,28 @@ def report_ppp(tournament_id):
                     })
                     break
 
+    # Убираем принудительные разрывы страниц (<w:br w:type="page"/>) из тела документа,
+    # чтобы таблицы протокола начинались сразу на первой странице (шаблон разрывает
+    # страницу между шапкой и таблицами).
+    from docx.oxml.ns import qn as _qn2
+    for _p in list(doc.element.body.findall(_qn2('w:p'))):
+        _has_text = False
+        for _r in _p.findall(_qn2('w:r')):
+            for _x in _r.findall(_qn2('w:br')):
+                if (_x.get(_qn2('w:type')) or '') == 'page':
+                    _r.remove(_x)
+            if _r.findall(_qn2('w:t')):
+                _has_text = True
+        # пустой абзац, остававшийся только для разрыва страницы — удаляем
+        if not _has_text and not _p.findall(_qn2('w:r')) and not _p.findall(_qn2('w:drawing')):
+            _p.getparent().remove(_p)
+
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
     return send_file(buf, as_attachment=True,
-                     download_name=f"protokol_prizery_{tournament_id}.docx",
+                     download_name=(f"predvaritelny_protokol_{tournament_id}.docx" if _is_preview
+                                    else f"protokol_prizery_{tournament_id}.docx"),
                      mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
 

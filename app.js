@@ -1542,7 +1542,8 @@ async openAbout() {
         const tid = forcedId || parseInt(sel && sel.value);
         if (!tid) { toast('Сначала выберите соревнование', 'error'); return; }
         const a = document.createElement('a');
-        a.href = `/api/report/${tid}/ppp`;
+        // Параметр t=... — анти-кэш: чтобы браузер не отдавал прежний файл с тем же URL
+        a.href = `/api/report/${tid}/ppp?t=${Date.now()}`;
         a.download = `protokol_prizery_${tid}.docx`;
         document.body.appendChild(a);
         a.click();
@@ -1581,6 +1582,21 @@ async openAbout() {
     openReportInNewTab(tournamentId) {
         const url = `/api/report/${tournamentId}`;
         window.open(url, '_blank');
+    },
+
+    // Скачивание «Предварительного протокола» (.docx) из ppp2_template.docx
+    downloadPppPreview(forcedId) {
+        const sel = document.getElementById('results-tournament-select');
+        const tid = forcedId || parseInt(sel && sel.value);
+        if (!tid) { toast('Сначала выберите соревнование', 'error'); return; }
+        const a = document.createElement('a');
+        // Параметр t=... — анти-кэш: чтобы браузер не отдавал прежний файл с тем же URL
+        a.href = `/api/report/${tid}/ppp?mode=preview&t=${Date.now()}`;
+        a.download = `predvaritelny_protokol_${tid}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast('📄 Предварительный протокол формируется…', 'info', 3000);
     },
 
     // Печать результатов текущего соревнования
@@ -4058,8 +4074,12 @@ for (const weightClass of filteredWeightClasses) {
                 // Бай (нечётный последний слот = пара с a2===null) ждёт победителя
                 // первой пары и попадает в пару во 2-м раунде.
                 const byeSlot = (slots.length % 2 !== 0) ? slots[slots.length - 1] : null;
-                // Полное число раундов = логарифм по основанию 2 от числа слотов
-                const totalRounds = Math.max(1, Math.round(Math.log2(slots.length)));
+                // Полное число раундов = логарифм по основанию 2 от числа слотов,
+                // округлённый ВВЕРХ: Math.ceil(log2(N)), а не Math.round. Для не-степеней
+                // двойки (5, 6, 7, 9, 10...) число раундов = ceil(log2(N)), иначе последний
+                // (финальный) раунд не строится — например для 5 бойцов round(log2(5))=2,
+                // а нужно 3 (1/4 -> полуфинал -> финал).
+                const totalRounds = Math.max(1, Math.ceil(Math.log2(slots.length)));
                 let roundNum = 1;
                 while (roundNum < totalRounds) {
                     const prev = rounds[rounds.length - 1];
@@ -4653,22 +4673,21 @@ for (const weightClass of filteredWeightClasses) {
 
     // Строит пары для дерева: статически все раунды, победители из resultsMap подставляются сразу
     _buildTreeRounds(slots, resultsMap, fid, wc) {
+        // Единый построитель раундов, ТОЧНО совпадающий с серверным _build_tree_rounds
+        // и клиентским buildFullRounds (вкладка «Результаты»). Для любого N (чётного,
+        // нечётного, не-степени-двойки) строит полное дерево до финала (одна пара).
+        // Для 5 бойцов даёт 3 раунда (1/4 -> полуфинал -> финал), финал в день 3.
         const rounds = [];
         let firstRound = [];
         let pairIndex = 0;
         const N = slots.length;
-
-        // Для НЕчётного числа — строим как раньше (пары по 2 + один бай), схеме X-Б7
-        // обрабатывает ветка ниже. Для чётного НЕ-степени-двойки (6,10,12,...) —
-        // в 1-м раунде часть бойцов получает бай, чтобы далее каждый раунд был
-        // степенью двойки и полуфиналы формировались полностью.
         const isPow2 = (N & (N - 1)) === 0;
+
         if (N % 2 === 0 && !isPow2) {
-            // Чётное не-степень-двойки: достраиваем баями до степени двойки.
+            // Чётное не-степень-двойки: часть бойцов в 1-м раунде, остальные — баи.
             let roundsCount = 0; { let x = N; while (x > 1) { x = Math.ceil(x / 2); roundsCount++; } }
             const halfPow = Math.pow(2, roundsCount - 1);
-            const playInR1 = 2 * (N - halfPow); // сколько играют в 1-м раунде
-            // Пары 1-го раунда (первые playInR1 участников), баи у остальных
+            const playInR1 = 2 * (N - halfPow);
             for (let i = 0; i < playInR1 - 1; i += 2) {
                 firstRound.push({ a1: slots[i], a2: slots[i + 1], pairIndex: pairIndex, result: resultsMap[`${wc}|${pairIndex}`] || null, day: 1 });
                 pairIndex++;
@@ -4687,8 +4706,7 @@ for (const weightClass of filteredWeightClasses) {
             }
         }
         rounds.push(firstRound);
-        const byeSlot = (N % 2 !== 0) ? slots[N - 1] : null;
-        const totalRounds = Math.max(1, Math.round(Math.log2(slots.length)));
+
         const winnerOf = (f) => {
             if (!f || !f.result || f.result.winner_id == null) return null;
             const wId = fid(f.result.winner_id);
@@ -4697,84 +4715,91 @@ for (const weightClass of filteredWeightClasses) {
             return null;
         };
 
-        // Спецслучай: нечётное число бойцов (бай). Схема для 9 и ей подобных.
-        //  День 1: пары (Б1-Б2, Б3-Б4, ...), последний — бай.
-        //  День 2: [поб.первой пары vs бай] -> X; ... [X vs поб.послед.пары].
-        //  Далее — обычные раунды по победителям.
-        if (byeSlot) {
-            const byeId = fid(byeSlot);
-            // День 2 (раунд 2)
-            const day2 = [];
-            const firstPair = firstRound[0];
-            const wFirst = winnerOf(firstPair);
-            const wFirstNoBye = (wFirst && fid(wFirst) !== byeId) ? wFirst : null;
-            // Пара 2A: X = поб.первой пары vs бай
-            day2.push({ a1: wFirstNoBye, a2: byeSlot, pairIndex: 1000, result: resultsMap[`${wc}|1000`] || null, day: 2 });
-            // Остальные победители (prev[1..], кроме бая) попарно в день 2
-            const rest = [];
-            for (let i = 1; i < firstRound.length; i++) { const w = winnerOf(firstRound[i]); if (w && fid(w) !== byeId) rest.push(w); }
-            let si = 0, pIdx = 1001;
-            const centralPairs = [];
-            while (si + 1 < rest.length) {
-                const pair = { a1: rest[si], a2: rest[si + 1], pairIndex: pIdx, result: resultsMap[`${wc}|${pIdx}`] || null, day: 2 };
-                centralPairs.push(pair); day2.push(pair); pIdx++; si += 2;
+        // Классическая сетка для N >= 9 (достройка баями до ближайшей степени двойки):
+        // то же, что серверный _build_tree_rounds для N>=9. В первом раунде играют
+        // 2*(N - S/2) бойцов (пары), остальные — баи. Далее обычные раунды соседних
+        // победителей; полуфинал даёт 2 проигравших = 2 бронзы.
+        if (N >= 9) {
+            let S = 1;
+            while (S < N) S *= 2;
+            const playIn = 2 * (N - S / 2);
+            const firstClassic = [];
+            let pIdx0 = 0;
+            for (let i = 0; i < playIn - 1; i += 2) {
+                firstClassic.push({ a1: slots[i], a2: slots[i + 1], pairIndex: pIdx0, result: resultsMap[`${wc}|${pIdx0}`] || null, day: 1 });
+                pIdx0++;
             }
-            // Победитель пары 2A (X) и одиночный победитель (Б7 из последней пары):
-            // их бой ДОБАВЛЯЕМ в день 2 — X против победителя последней пары.
-            if (rest.length % 2 !== 0) {
-                const lone = rest[rest.length - 1];
-                const xObj = winnerOf(day2[0]);
-                day2.push({ a1: xObj, a2: lone, pairIndex: pIdx, result: resultsMap[`${wc}|${pIdx}`] || null, day: 2 });
-                // pIdx -> для финального раунда
+            for (let i = playIn; i < N; i++) {
+                firstClassic.push({ a1: slots[i], a2: null, pairIndex: null, result: { winner_id: slots[i].athlete_id, method: 'авто' }, day: 1 });
             }
-            rounds.push(day2);
-
-            // Дальше — обычные раунды по победителям (3-й и т.д.)
-            // ВАЖНО: пары day2 = [p1000 (Бай: X), p1001 (central), p1002 (X-Б7), ...].
-            // Пара p1000 — это только под-шаг для получения X, она НЕ даёт победителя
-            // в следующий раунд напрямую: X уже участвует в паре X-Б7 (p1002).
-            // Поэтому следующий раунд формируем из пар day2, ИСКЛЮЧАЯ первую (p1000).
-            let roundNum = 3;
-            const nextGen = () => {
-                const prev = rounds[rounds.length - 1];
-                const offset = (roundNum - 1) * 1000;
-                const nextRound = [];
-                let startIdx = 0;
-                // Если есть одиночный победитель (X-ветка), то первая пара p1000 — лишь
-                // под-шаг для получения X; в следующий раунд она НЕ даёт победителя напрямую.
-                if (roundNum === 3 && rest.length % 2 !== 0) {
-                    startIdx = 1;
-                }
-                for (let i = startIdx; i + 1 < prev.length; i += 2) {
-                    const pp = offset + (Math.floor((i - startIdx) / 2));
-                    nextRound.push({ a1: winnerOf(prev[i]), a2: winnerOf(prev[i + 1]), pairIndex: pp, result: resultsMap[`${wc}|${pp}`] || null, day: roundNum });
-                }
-                rounds.push(nextRound);
-                roundNum++;
-            };
-            // Продолжаем, пока в последнем раунде больше одной пары (с учётом пропуска p1000)
-            while (true) {
-                const prev = rounds[rounds.length - 1];
-                let cnt = prev.length;
-                if (roundNum === 3 && rest.length % 2 !== 0) cnt -= 1; // p1000 не считается
-                if (cnt <= 1) break;
-                nextGen();
-            }
-            return rounds;
+            rounds.length = 0;
+            rounds.push(firstClassic);
+            return this._finishTreeRounds(rounds, resultsMap, fid, wc, 2, winnerOf, []);
         }
 
-        // Чётное число бойцов: обычные статические раунды (все пары в 1-м раунде)
-        let roundNum2 = 2;
-        while (roundNum2 <= totalRounds) {
-            const prev = rounds[rounds.length - 1];
-            const offset = (roundNum2 - 1) * 1000;
-            const nextRound = [];
-            for (let i = 0; i + 1 < prev.length; i += 2) {
-                const pp = offset + (i / 2);
-                nextRound.push({ a1: winnerOf(prev[i]), a2: winnerOf(prev[i + 1]), pairIndex: pp, result: resultsMap[`${wc}|${pp}`] || null, day: roundNum2 });
+        // Для нечётного N (бай): полуфинал 2-го дня играется с баем, чтобы ожидающий
+        // боец не «висел» до финала. Схема для 3, 5, 7... бойцов:
+        //   раунд 1 (день 1): пары + бай
+        //   раунд 2 (день 2): (поб.первой пары vs бай) — полуфинал, затем остальные
+        //                      победители попарно (последний — авто-проход)
+        //   раунд 3+ (день 3): финал и далее по победителям
+        if (N % 2 !== 0) {
+            const bye = slots[N - 1];
+            // Победители ПЕРВОЙ пары и бай — в полуфинале дня 2.
+            const w1 = winnerOf(rounds[0][0]);
+            let day2 = [];
+            day2.push({ a1: w1, a2: bye, pairIndex: 1000, result: resultsMap[`${wc}|1000`] || null, day: 2 });
+            // Остальные победители пар 1-го раунда (кроме первой пары и бая) — попарно.
+            const others = [];
+            for (let i = 1; i < rounds[0].length; i++) {
+                const w = winnerOf(rounds[0][i]);
+                if (w && fid(w) !== fid(bye)) others.push(w);
             }
+            let carryWinners = [];
+            let pIdx = 1001;
+            for (let i = 0; i + 1 < others.length; i += 2) {
+                day2.push({ a1: others[i], a2: others[i + 1], pairIndex: pIdx, result: resultsMap[`${wc}|${pIdx}`] || null, day: 2 });
+                pIdx++;
+            }
+            if (others.length % 2 !== 0) {
+                // нечётный остаток — победитель без пары в день 2; он НЕ показывается
+                // в колонке дня 2, а «переносится» в следующий раунд (финал), где
+                // встретит победителя пары p1000.
+                carryWinners = [others[others.length - 1]];
+            }
+            rounds.push(day2);
+            return this._finishTreeRounds(rounds, resultsMap, fid, wc, 3, winnerOf, carryWinners);
+        }
+
+        // Дальше раунды: пары соседних победителей + перенос нечётного «хвоста»-бая
+        // победителем дальше без пары. Пока в последнем раунде >1 пары.
+        return this._finishTreeRounds(rounds, resultsMap, fid, wc, 2, winnerOf);
+    },
+
+    // Достраивает раунды до финала (одна пара): пары соседних победителей.
+    // carryWinners — победители, перенесённые из предыдущего раунда без пары
+    // (нечётный остаток при нечётном числе бойцов); они НЕ рисуются в предыдущем
+    // раунде, а встают очередью в следующий.
+    _finishTreeRounds(rounds, resultsMap, fid, wc, startRn, winnerOf, carryWinners) {
+        let rn = startRn;
+        let carry = carryWinners || [];
+        while (true) {
+            const prev = rounds[rounds.length - 1];
+            // победители каждой ячейки (None, если бой не решён) — структура стабильна
+            const winners = prev.map(f => winnerOf(f));
+            const all = [...carry, ...winners];
+            if (all.length <= 1) break;
+            const offset = (rn - 1) * 1000;
+            const nextRound = [];
+            let pp = offset;
+            for (let i = 0; i + 1 < all.length; i += 2) {
+                nextRound.push({ a1: all[i], a2: all[i + 1], pairIndex: pp, result: resultsMap[`${wc}|${pp}`] || null, day: rn });
+                pp++;
+            }
+            // нечётный остаток — переносим в следующий раунд (не рисуем здесь)
+            carry = (all.length % 2 !== 0) ? [all[all.length - 1]] : [];
             rounds.push(nextRound);
-            roundNum2++;
+            rn++;
         }
         return rounds;
     },
@@ -5270,20 +5295,66 @@ async advanceWinner(tournamentId, fight, winnerId) {
         const tournamentDays = Math.max(daysFromDates, Math.max(1, parseInt(tournament.days) || 1));
 
         // Строит раунды из слотов, как в сетке. Возвращает { rounds, champion, maxRounds }
-        const buildRounds = (slots, wc) => {
-            // Единая логика построения раундов — та же, что в режиме «ёлки»
-            // (корректно обрабатывает бай и схему X-Б7 для нечётного числа бойцов).
+        // Строит ПОЛНОЕ дерево раундов до финала (любой N сходится к 1 паре) и
+        // вычисляет призёров. Это ЗЕРКАЛО серверного _build_tree_rounds +
+        // _build_weight_rounds: там бронза = проигравшие полуфинала (предпоследний
+        // раунд полного дерева). Сеточный _buildTreeRounds для чётных не-степеней-
+        // двойки (10, 20, ...) не достраивает финал, поэтому использовать его для
+        // расчёта бронзы нельзя — проигравшие 1/4 ошибочно попадали бы в 3-е места.
+const buildFullRounds = (slots, wc) => {
+            // Используем ЕДИНЫЙ построитель _buildTreeRounds (согласован с сервером):
+            // для нечётного N бай играет полуфинал во 2-й день, поб.2-й пары уходит
+            // в финал. Поля пары: a1/a2, pairIndex, result, day.
             const rounds = this._buildTreeRounds(slots, resultsMap, fid, wc);
-
-            // Чемпион — единственный победитель верхнего раунда, если все пары решены
-            let champion = null;
+            // Призёры
+            let champion = null, silver = null; const bronzes = [];
+            const winnerOf2 = (f) => {
+                if (!f || !f.result || f.result.winner_id == null) return null;
+                const wid = fid(f.result.winner_id);
+                if (f.a1 && fid(f.a1) === wid) return fid(f.a1);
+                if (f.a2 && f.a2 !== null && fid(f.a2) === wid) return fid(f.a2);
+                return null;
+            };
             const top = rounds[rounds.length - 1];
-            const topWinners = top.map(f => f.result ? f.result.winner_id : null);
-            const anyUnresolved = rounds.some(r => r.some(f => f.a2 !== null && !f.result));
-            if (!anyUnresolved && topWinners.length === 1 && topWinners[0] != null) {
-                champion = topWinners[0];
+            const resolvedTop = top.filter(f => f.a2 != null && f.result && f.result.winner_id != null && f.result.winner_id !== 0);
+            if (resolvedTop.length === 1) {
+                const fp = resolvedTop[0];
+                if (fp.a1 != null && fp.a2 != null && (fp.result.winner_id === fid(fp.a1) || fp.result.winner_id === fid(fp.a2))) {
+                    champion = fid(fp.result.winner_id);
+                    silver = (fid(fp.a1) === champion) ? fid(fp.a2) : fid(fp.a1);
+                }
             }
-            return { rounds, champion, maxRounds: rounds.length };
+            if (rounds.length >= 2) {
+                const semi = rounds[rounds.length - 2];
+                for (const f of semi) {
+                    if (!f.result || f.result.winner_id == null || f.result.winner_id === 0) continue;
+                    const la = f.a1 != null ? fid(f.a1) : null;
+                    const lb = f.a2 != null ? fid(f.a2) : null;
+                    if (la == null || lb == null) continue;
+                    const loser = (lb === f.result.winner_id) ? la : lb;
+                    if (loser != null && loser !== champion && loser !== silver && bronzes.length < 2) bronzes.push(loser);
+                }
+            }
+            // Добор второй бронзы для нечётного N при одном полуфинале (5 бойцов)
+            const N = slots.length;
+            if (N % 2 !== 0 && bronzes.length < 2 && rounds.length >= 2) {
+                const semi = rounds[rounds.length - 2];
+                if (semi.length === 1) {
+                    const first = rounds[0];
+                    for (let i = 1; i < first.length; i++) {
+                        const f = first[i];
+                        if (!f.result || f.result.winner_id == null || f.result.winner_id === 0) continue;
+                        const la = f.a1 != null ? fid(f.a1) : null;
+                        const lb = f.a2 != null ? fid(f.a2) : null;
+                        if (la == null || lb == null) continue;
+                        const loser = (lb === f.result.winner_id) ? la : lb;
+                        if (loser != null && loser !== champion && loser !== silver && !bronzes.includes(loser)) {
+                            bronzes.push(loser); break;
+                        }
+                    }
+                }
+            }
+return { rounds, champion, silver, bronzes, maxRounds: rounds.length };
         }
 
         let html = '';
@@ -5293,48 +5364,31 @@ async advanceWinner(tournamentId, fight, winnerId) {
             const slots = [...(lottery[wc] || [])].sort((a, b) => a.slot - b.slot);
             if (slots.length === 0) continue;
 
-            const { rounds, champion, maxRounds } = buildRounds(slots, wc);
-
-            // Серебро — проигравший финала (если финал решён)
-            let silver = null;
-            // Две бронзы — проигравшие ПОЛУФИНАЛОВ (решённых пар), появляются сразу
-            const bronzes = [];   // два бронзовых призёра
-            const finalRound = rounds[rounds.length - 1];
-            if (finalRound.length === 1 && finalRound[0].a2 !== null) {
-                const fp = finalRound[0];
-                if (fp.result && champion != null) {
-                    const la = fid(fp.a1), lb = fid(fp.a2);
-                    const loserId = (la !== champion) ? la : lb;
-                    if (loserId != null && idName[loserId]) silver = { name: idName[loserId].name, id: loserId };
-                }
-            }
-            if (maxRounds >= 2) {
-                const semiRound = rounds[rounds.length - 2];
-                for (const sp of semiRound) {
-                    if (!sp.result || sp.a2 === null) continue;
-                    const la = fid(sp.a1), lb = fid(sp.a2);
-                    const loserId = (sp.result.winner_id === la) ? lb : la;
-                    if (loserId != null && idName[loserId] && loserId !== champion) {
-                        if (bronzes.length < 2) {
-                            bronzes.push({ name: idName[loserId].name, id: loserId });
-                        }
-                    }
-                }
-            }
+            const { rounds, champion, silver, bronzes, maxRounds } = buildFullRounds(slots, wc);
 
             // Показываем категорию динамически: если есть хотя бы один решённый
             // полуфинал с бронзовым призёром (или завершённый чемпион) — выводим.
             // Данные дополняются при повторной отрисовке по мере появления боёв.
             if (bronzes.length === 0 && champion == null) continue;
 
+            // Привязываем имена и день бронзы (день полуфинала = предпоследний раунд полного дерева)
+            const semiDay = maxRounds >= 2
+                ? this.roundToDay(maxRounds - 1, maxRounds, tournamentDays)
+                : null;
+            const silverObj = (silver != null && idName[silver]) ? { name: idName[silver].name, id: silver } : null;
+            const bronzesObj = bronzes
+                .filter(bid => bid != null && idName[bid])
+                .map(bid => ({ name: idName[bid].name, id: bid, day: semiDay }));
+
             hasResults = true;
             const gold = idName[champion] ? { name: idName[champion].name, id: champion } : null;
+            const finalRound = rounds[rounds.length - 1];
 
             // День финала
             const finalDay = this.roundToDay(maxRounds, maxRounds, tournamentDays);
             const finalName = finalRound.length === 1 && finalRound[0].a2 !== null ? 'Финал' : 'Победитель без соперника';
 
-            html += `<div class="bracket-round"><h3 class="weight-title">${this.escapeHtml(wc)} <span class="day-tag">День ${finalDay}</span></h3>`;
+            html += `<div class="bracket-round"><h3 class="weight-title">${this.escapeHtml(wc)}</h3>`;
 
             const medalStyle = (color, bg) => `style="border-color:${color}; background:${bg};"`;
             // Победитель категории (Золото) — показываем только когда определён
@@ -5347,16 +5401,16 @@ async advanceWinner(tournamentId, fight, winnerId) {
                 </div>`;
             }
 
-            if (silver) {
+            if (silverObj) {
                 html += `<div class="result-card" ${medalStyle('#c0c0c0', 'rgba(192,192,192,0.08)')}>
                     <div class="result-fighters" style="justify-content:center; gap:16px;">
                         <span style="font-size:1.6em;">🥈</span>
-                        <span style="font-size:1.15em; font-weight:600; color:#c0c0c0;">${this.escapeHtml(silver.name)}</span>
+                        <span style="font-size:1.15em; font-weight:600; color:#c0c0c0;">${this.escapeHtml(silverObj.name)}</span>
                     </div>
                 </div>`;
             }
             // Две бронзы — оба проигравших полуфиналиста (появляются сразу)
-            bronzes.forEach(b => {
+            bronzesObj.forEach(b => {
                 html += `<div class="result-card" ${medalStyle('#cd7f32', 'rgba(205,127,50,0.08)')}>
                     <div class="result-fighters" style="justify-content:center; gap:16px;">
                         <span style="font-size:1.6em;">🥉</span>
