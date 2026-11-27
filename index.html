@@ -53,7 +53,13 @@
                         </div>
                     </form>
                     <div class="tournament-list">
-                        <h3>Соревнования</h3>
+                        <h3 style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+                            Соревнования
+                            <label style="font-size:0.8em; font-weight:400; color:#ccc; cursor:pointer; display:flex; align-items:center; gap:6px;">
+                                <input type="checkbox" id="show-all-tournaments" style="accent-color:#ffd700; cursor:pointer;">
+                                Показывать все
+                            </label>
+                        </h3>
 <div class="import-section" style="margin-top: 15px; padding: 15px; border: 1px solid rgba(255,215,0,0.15); border-radius: 6px; background: rgba(255,255,255,0.05);">
                                 <p style="margin: 0 0 10px 0; font-size: 0.9em; color: rgba(255,255,255,0.7);">📥 Импорт списка спортсменов (Word / Excel)</p>
                                 <div class="form-row">
@@ -62,12 +68,12 @@
                                         <option value="мужской">Мужской</option>
                                         <option value="женский">Женский</option>
                                     </select>
-                                    <button id="import-athletes-btn" class="btn-primary" style="flex:0;">Импорт</button>
                                 </div>
                                 <div id="import-status" class="info" style="margin-top:8px; font-size:0.9em;"></div>
-                                <div class="form-row" style="margin-top:8px;">
+                                <div class="form-row" style="margin-top:8px; align-items:center;">
                                     <label style="margin-right:16px; font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="append" checked style="accent-color:#ffd700;"> Дополнить список</label>
-                                    <label style="font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="replace" style="accent-color:#ffd700;"> Заменить список (удалить старых)</label>
+                                    <label style="margin-right:20px; font-size:0.85em; color:#ccc; cursor:pointer;"><input type="radio" name="import-mode" value="replace" style="accent-color:#ffd700;"> Загрузить список участников</label>
+                                    <button id="import-athletes-btn" class="btn-primary" style="flex:0;">Импорт</button>
                                 </div>
                             </div>
                             <div class="import-section" style="display:none; margin-top: 10px; padding: 15px; border: 1px solid rgba(255,215,0,0.15); border-radius: 6px; background: rgba(255,255,255,0.05);">

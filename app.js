@@ -47,6 +47,8 @@ const API = {
 
     // Спортсмены
     getAthletes(params = '') { return this.request('GET', `/athletes${params}`); },
+    getFreeAthletes() { return this.request('GET', '/athletes/free'); },
+    previewDocxImport(formData) { return fetch('/api/import/docx/preview', { method: 'POST', body: formData }).then(r => r.json()); },
     getAthlete(id) { return this.request('GET', `/athletes/${id}`); },
     getAthletes() { return this.request('GET', '/athletes'); },
     addAthlete(data) { return this.request('POST', '/athletes', data); },
@@ -298,6 +300,11 @@ const App = {
 
     getDefaultTournamentId() {
         return localStorage.getItem('default_tournament_id');
+    },
+
+    // Текущее (активное) соревнование — то, что отмечено «по умолчанию».
+    _currentTournamentId() {
+        return this.getDefaultTournamentId();
     },
 
     // Применяет соревнование по умолчанию ко всем выпадающим спискам
@@ -1204,7 +1211,7 @@ async openAbout() {
             const pWeight = document.getElementById('participants-filter-weight')?.value || '';
             // Заполняем выпадающий список весовых категорий участников текущего турнира
             const pWeightSel = document.getElementById('participants-filter-weight');
-            if (pWeightSel && !pWeightSel.dataset.initialized) {
+            if (pWeightSel) {
                 const opts = ['<option value="">Все весовые категории</option>'];
                 const seen = {};
                 participants.forEach(a => {
@@ -1220,7 +1227,9 @@ async openAbout() {
                 });
                 const curW = pWeightSel.value;
                 pWeightSel.innerHTML = opts.join('');
-                if (curW) pWeightSel.value = curW;
+                if (curW && opts.some(o => o.includes(`value="${this.escapeHtml(curW)}"`))) {
+                    pWeightSel.value = curW;
+                }
             }
             // Применяем фильтры пола/веса
             if (pGender) {
@@ -2045,7 +2054,7 @@ setupAthletesImport() {
 
             const modeRadio = document.querySelector('input[name="import-mode"]:checked');
             const replaceMode = !!(modeRadio && modeRadio.value === 'replace');
-            if (replaceMode && !confirm('⚠️ Режим «Заменить список»: при импорте ВСЯ текущая информация о спортсменах будет удалена и заменена загружаемым списком. Продолжить?')) return;
+            if (replaceMode && !confirm('⚠️ Режим «Загрузить список участников»: при импорте ВСЯ текущая информация о спортсменах будет удалена и заменена загружаемым списком. Продолжить?')) return;
 
             const ext = (file.name.split('.').pop() || '').toLowerCase();
             const gender = document.getElementById('athletes-import-gender')?.value || 'мужской';
@@ -2069,16 +2078,46 @@ setupAthletesImport() {
                     const fd = new FormData();
                     fd.append('file', file);
                     fd.append('gender', gender);
-                    if (replaceMode) fd.append('replace', '1'); // в режиме «дополнить» старый список не трогаем
-                    const res = await fetch('/api/import/docx', { method: 'POST', body: fd });
-                    const data = await res.json();
-                    if (!res.ok || data.error) {
-                        if (statusEl) statusEl.innerHTML = '❌ Ошибка загрузки: ' + (data.error || 'Ошибка импорта');
-                        toast('Ошибка загрузки: ' + (data.error || 'Ошибка импорта'), 'error');
-                        if (runBtn) runBtn.disabled = false;
-                        return;
+                    // При «загрузке списка» сперва показываем сверку дублей с уже
+                    // имеющимися в этом турнире бойцами, если турнир не пуст.
+                    const hasExisting = targetTid ? (await API.getTournament(targetTid)).athlete_ids?.length : 0;
+                    if (targetTid && hasExisting) {
+                        const prev = await API.previewDocxImport(fd);
+                        if (!prev || prev.error) {
+                            if (statusEl) statusEl.innerHTML = '❌ ' + (prev?.error || 'Ошибка чтения файла');
+                            toast(prev?.error || 'Ошибка чтения файла', 'error');
+                            if (runBtn) runBtn.disabled = false;
+                            return;
+                        }
+                        const existing = await API.getAthletes();
+                        const decisions = await this._promptImportDiff(prev.rows, existing, replaceMode, statusEl);
+                        if (decisions === null) { // отменено
+                            if (statusEl) statusEl.innerHTML = 'Загрузка отменена.';
+                            toast('Загрузка отменена');
+                            if (runBtn) runBtn.disabled = false;
+                            return;
+                        }
+                        // Выполняем импорт по решениям: 'replace' — обновить существующего,
+                        // 'skip' — пропустить, 'new' — добавить нового.
+                        const applyRes = await this._applyImportDecisions(decisions, targetTid, gender, statusEl, replaceMode);
+                        importedCount = applyRes.imported;
+                        errorCount = applyRes.errors;
+                        skippedCount = applyRes.skipped;
+                        ids = applyRes.ids;
+                        if (applyRes.aborted) { if (runBtn) runBtn.disabled = false; return; }
+                    } else {
+                        // Турнир пуст или не выбран — прямой импорт (старое поведение)
+                        if (replaceMode) fd.append('replace', '1');
+                        const res = await fetch('/api/import/docx', { method: 'POST', body: fd });
+                        const data = await res.json();
+                        if (!res.ok || data.error) {
+                            if (statusEl) statusEl.innerHTML = '❌ Ошибка загрузки: ' + (data.error || 'Ошибка импорта');
+                            toast('Ошибка загрузки: ' + (data.error || 'Ошибка импорта'), 'error');
+                            if (runBtn) runBtn.disabled = false;
+                            return;
+                        }
+                        importedCount = data.imported; errorCount = data.errors || 0; skippedCount = data.skipped || 0; ids = data.ids || [];
                     }
-                    importedCount = data.imported; errorCount = data.errors || 0; skippedCount = data.skipped || 0; ids = data.ids || [];
                 } else {
                     // Excel (.xls/.xlsx) — при «замене» очищаем список, затем импортируем
                     if (replaceMode) {
@@ -2099,14 +2138,9 @@ setupAthletesImport() {
                 await this.renderParticipants();
                 await this.renderTournaments();
                 fileInput.value = '';
-                const detail = (replaceMode ? 'Заменён список: ' : 'Дополнено: ') + `${importedCount}`
-                    + (skippedCount ? ` (уже были: ${skippedCount})` : '')
-                    + (errorCount ? ` | Ошибок: ${errorCount}` : '');
-                if (statusEl) statusEl.innerHTML = '✅ Все спортсмены успешно загружены. ' + detail;
-                let msg = '✅ Все спортсмены успешно загружены. ' + detail;
-                if (targetTid && ids.length > 0) msg += `\nПривязано к турниру #${targetTid}: ${ids.length}`;
-                else if (!targetTid) msg += `\nСоревнований нет — турнир не создан, привязка не выполнена`;
-                toast(msg, 'success', 6000);
+                const totalImported = importedCount + skippedCount;
+                if (statusEl) statusEl.innerHTML = `✅ Все спортсмены в количестве ${totalImported} человек, успешно загружены`;
+                this._showImportSuccessModal(totalImported, errorCount);
                 if (runBtn) runBtn.disabled = false;
             } catch (e) {
                 if (statusEl) statusEl.innerHTML = '❌ Ошибка загрузки: ' + e.message;
@@ -2251,6 +2285,175 @@ setupAthletesImport() {
             };
             reader.readAsArrayBuffer(file);
         });
+    },
+
+    // Показывает интерактивное окно различий для строк из Word-файла против
+    // уже существующих в базе бойцов. Возвращает массив решений для каждой строки:
+    //    items: [{ row, match, decision }]
+    //    decision: 'replace' — обновить существующего, 'skip' — пропустить, 'new' — добавить нового
+    // Возвращает null, если пользователь отменил.
+    async _promptImportDiff(rows, existing, replaceMode, statusEl) {
+        // Сверяем по ФИО (в пределах этого списка — ищем первого с тем же именем)
+        const byName = new Map();
+        existing.forEach(a => byName.set(String(a.name || '').trim().toLowerCase(), a));
+
+        const items = rows.map(row => {
+            const key = String(row.name || '').trim().toLowerCase();
+            const match = byName.get(key) || null;
+            return { row, match, decision: match ? 'skip' : 'new' };
+        });
+
+        const dupes = items.filter(i => i.match);
+        if (dupes.length === 0) {
+            return items; // дублей нет — импортируем все как новые
+        }
+
+        // Строим окно
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.style.display = 'flex';
+        const row = (it) => `
+            <div class="diff-row" data-name="${this.escapeHtml(it.row.name)}" style="border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:10px; margin-bottom:8px;">
+                <div style="font-weight:600; margin-bottom:4px;">${this.escapeHtml(it.row.name)}</div>
+                ${it.match ? `
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; font-size:0.85em; margin-bottom:6px;">
+                        <div style="flex:1; min-width:200px; background:rgba(255,80,80,0.08); padding:6px 8px; border-radius:4px;">
+                            <b>В базе:</b><br>
+                            ${this.escapeHtml(it.match.name)} · ${it.match.weight ?? '—'} кг · ${this.escapeHtml(it.match.gender || '—')} · ${it.match.birth_year || '—'} г.<br>
+                            <span style="color:#999;">${this.escapeHtml(it.match.region || '')}${it.match.coach ? ' · ' + this.escapeHtml(it.match.coach) : ''}</span>
+                        </div>
+                        <div style="flex:1; min-width:200px; background:rgba(120,200,120,0.08); padding:6px 8px; border-radius:4px;">
+                            <b>Из файла:</b><br>
+                            ${this.escapeHtml(it.row.name)} · ${it.row.weight ?? '—'} кг · ${it.row.birth_year || '—'} г.<br>
+                            <span style="color:#999;">${this.escapeHtml(it.row.region || '')}${it.row.coach ? ' · ' + this.escapeHtml(it.row.coach) : ''}</span>
+                        </div>
+                    </div>
+                ` : `
+                    <div style="font-size:0.85em; color:#999;">Новый спортсмен</div>
+                `}
+                <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;">
+                    ${it.match ? `
+                        <label style="font-size:0.8em; cursor:pointer;"><input type="radio" name="diff-${this.escapeHtml(it.row.name)}" value="replace" class="diff-choice"> Заменить существующего</label>
+                    ` : ''}
+                    ${it.match ? `
+                        <label style="font-size:0.8em; cursor:pointer; color:#aaa;"><input type="radio" name="diff-${this.escapeHtml(it.row.name)}" value="skip" class="diff-choice" checked> Пропустить (не загружать)</label>
+                    ` : ''}
+                    <label style="font-size:0.8em; cursor:pointer;"><input type="radio" name="diff-${this.escapeHtml(it.row.name)}" value="new" class="diff-choice" ${!it.match ? 'checked' : ''}> Добавить как нового</label>
+                </div>
+            </div>
+        `;
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width:720px; max-height:85vh; display:flex; flex-direction:column;">
+                <h2 style="margin:0 0 4px;">Загрузка списка участников</h2>
+                <p class="info" style="margin-top:0;">В турнире уже есть спортсмены с такими же данными (${dupes.length} из ${rows.length}). Выберите действие для каждого совпадения:</p>
+                <div style="overflow-y:auto; flex:1; padding:6px 2px;" id="diff-list">${items.map(row).join('')}</div>
+                <div style="display:flex; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap;">
+                    <button type="button" class="btn-secondary" id="diff-all-replace">Заменить все совпавшие</button>
+                    <button type="button" class="btn-secondary" id="diff-all-skip">Пропустить все совпавшие</button>
+                    <span style="flex:1;"></span>
+                    <button type="button" class="btn-secondary" id="diff-cancel">Отмена</button>
+                    <button type="button" class="btn-primary" id="diff-ok">Продолжить загрузку</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        const markAll = (value) => {
+            modal.querySelectorAll('.diff-row').forEach(dv => {
+                const rb = dv.querySelector(`input.diff-choice[value="${value}"]`);
+                if (rb) rb.checked = true;
+            });
+        };
+        modal.querySelector('#diff-all-replace').addEventListener('click', () => markAll('replace'));
+        modal.querySelector('#diff-all-skip').addEventListener('click', () => markAll('skip'));
+
+        const result = new Promise((resolve) => {
+            const finish = (val) => { modal.remove(); resolve(val); };
+            modal.querySelector('#diff-cancel').addEventListener('click', () => finish(null));
+            modal.querySelector('#diff-ok').addEventListener('click', () => {
+                modal.querySelectorAll('.diff-row').forEach(dv => {
+                    const name = dv.dataset.name;
+                    const sel = dv.querySelector('input.diff-choice:checked');
+                    const item = items.find(x => String(x.row.name) === name);
+                    if (item && sel) item.decision = sel.value;
+                });
+                finish(items);
+            });
+            modal.addEventListener('click', (e) => { if (e.target === modal) finish(null); });
+        });
+
+        return result;
+    },
+
+    // Выполняет решения из окна различий: 'replace' — обновить существующего,
+    // 'skip' — пропустить, 'new' — добавить нового. Возвращает { imported, errors, skipped, ids, aborted }.
+    async _applyImportDecisions(items, targetTid, gender, statusEl, replaceMode) {
+        let imported = 0, errors = 0, skipped = 0;
+        const ids = [];
+        for (const it of items) {
+            const r = it.row;
+            if (it.decision === 'skip') {
+                skipped++;
+                continue;
+            }
+            if (it.decision === 'replace' && it.match) {
+                // Заменяем данные существующего бойца (не плодим новый id)
+                try {
+                    await API.updateAthlete(it.match.id, {
+                        name: r.name,
+                        birth_year: r.birth_year || it.match.birth_year || 0,
+                        weight: r.weight != null ? r.weight : it.match.weight,
+                        gender: it.match.gender || gender,
+                        rank: r.rank || it.match.rank || '',
+                        region: r.region || it.match.region || '',
+                        coach: r.coach || it.match.coach || ''
+                    });
+                    ids.push(it.match.id);
+                    imported++;
+                } catch (e) {
+                    console.error('Ошибка замены:', e); errors++;
+                }
+                continue;
+            }
+            // 'new' — создаём нового
+            try {
+                const a = await API.addAthlete({
+                    name: r.name,
+                    birth_year: r.birth_year || 0,
+                    weight: r.weight || 0,
+                    gender: gender,
+                    rank: r.rank || '',
+                    region: r.region || '',
+                    coach: r.coach || ''
+                });
+                if (a && a.id) ids.push(a.id);
+                imported++;
+            } catch (e) {
+                console.error('Ошибка добавления:', e); errors++;
+            }
+        }
+        return { imported, errors, skipped, ids, aborted: false };
+    },
+
+// Показывает модальное окно об успешной загрузке списка участников.
+    _showImportSuccessModal(count, errorCount) {
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.style.display = 'flex';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width:420px;">
+                <h2 style="margin:0 0 10px;">✅ Загрузка завершена</h2>
+                <p style="font-size:1em; margin:0 0 16px;">
+                    Все спортсмены в количестве <b>${count}</b> человек, успешно загружены${errorCount ? `.<br>Ошибок: ${errorCount}` : ''}.
+                </p>
+                <div style="display:flex; justify-content:flex-end;">
+                    <button id="import-ok-btn" class="btn-primary">OK</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        modal.querySelector('#import-ok-btn').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
     },
 
 setupExport() {
@@ -2623,6 +2826,12 @@ setupExport() {
     setupTournamentForm() {
         // Форма редактирования соревнования (модальное окно)
         const editForm = document.getElementById('edit-tournament-form');
+
+        // Чекбокс «Показывать все» — перерисовываем список турниров
+        const showAllChk = document.getElementById('show-all-tournaments');
+        if (showAllChk) {
+            showAllChk.addEventListener('change', () => this.renderTournaments());
+        }
         if (editForm) {
             editForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -2663,8 +2872,18 @@ setupExport() {
     async renderTournaments() {
         const container = document.getElementById('tournaments-container');
         try {
-            const tournaments = await API.getTournaments();
+            let tournaments = await API.getTournaments();
             if (!container) return;
+
+            // Чекбокс «Показывать все» (по умолчанию отжат) — если отжат, показываем
+            // только текущее (активное) соревнование.
+            const showAll = document.getElementById('show-all-tournaments');
+            if (showAll && !showAll.checked) {
+                const curId = this._currentTournamentId();
+                if (curId) {
+                    tournaments = tournaments.filter(t => parseInt(t.id) === parseInt(curId));
+                }
+            }
 
             if (tournaments.length === 0) {
                 container.innerHTML = '<div class="empty-state"><p>Нет соревнований</p></div>';
@@ -2873,31 +3092,61 @@ setupExport() {
 
     async manageParticipants(tournamentId) {
         // Получаем данные соревнования и всех спортсменов
-        const [tournament, athletes] = await Promise.all([
+        const [tournament, freeAthletes] = await Promise.all([
             API.getTournament(tournamentId),
-            API.getAthletes()
+            API.getFreeAthletes()
         ]);
+        // Это турнир — только его участники (строго по привязке в БД)
         const selected = new Set(tournament.athlete_ids || []);
+        const members = await this._resolveMembers(tournamentId, selected);
 
-        const listHtml = athletes.map(a => `
-            <label class="weight-class-check">
-                <input type="checkbox" value="${a.id}" ${selected.has(a.id) ? 'checked' : ''}>
-                ${this.escapeHtml(a.name)} (${a.weight} кг, ${a.gender})
-            </label>
-        `).join('');
+        const memberRow = (a) => `
+            <div class="mng-row" style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 8px; border-bottom:1px solid var(--border,#e8e8e8);">
+                <div style="flex:1; min-width:0;">
+                    <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${this.escapeHtml(a.name)}</div>
+                    <div style="font-size:0.85em; color:#777; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${a.weight} кг · ${a.gender} · ${a.birth_year || '—'} · ${this.escapeHtml(a.region || '—')}</div>
+                </div>
+                <button class="btn-danger mng-remove" data-id="${a.id}" title="Убрать из этого турнира" style="padding:2px 8px;">Убрать</button>
+            </div>
+        `;
 
-        // Простое модальное окно через confirm (заменю на prompt-style)
         const modal = document.createElement('div');
         modal.className = 'modal';
         modal.style.display = 'flex';
         modal.innerHTML = `
-            <div class="modal-content" style="max-width:600px;">
-                <h2>Участники соревнования</h2>
-                <p class="info">Отметьте спортсменов, участвующих в соревновании</p>
-                <div style="display:flex; flex-wrap:wrap; gap:4px; max-height:400px; overflow-y:auto; padding:10px 0;">
-                    ${listHtml}
+            <div class="modal-content" style="max-width:640px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h2 style="margin:0;">Участники соревнования</h2>
+                    <span style="font-size:0.85em; color:#777;" id="mng-count">${members.length}</span>
                 </div>
-                <div style="display:flex; gap:10px; margin-top:15px; justify-content:flex-end;">
+                <p class="info">Спортсмены привязаны только к этому турниру. Другие турниры не видны.</p>
+
+                <div style="margin-top:10px;">
+                    <div style="font-weight:600; margin-bottom:4px;">Участники этого турнира:</div>
+                    <div id="mng-members" style="max-height:280px; overflow-y:auto; border:1px solid var(--border,#e8e8e8); border-radius:6px; padding:4px;">
+                        ${members.length
+                            ? members.map(memberRow).join('')
+                            : '<div style="padding:12px; color:#888; text-align:center;">Участников пока нет</div>'}
+                    </div>
+                </div>
+
+                <div style="margin-top:14px;">
+                    <label for="mng-add-select" style="font-weight:600; display:block; margin-bottom:4px;">
+                        Добавить спортсмена (свободные, не в других турнирах):
+                    </label>
+                    <select id="mng-add-select" class="form-control" style="width:100%; max-width:100%;">
+                        <option value="">${freeAthletes.length ? '-- Выберите --' : '-- Свободных спортсменов нет --'}</option>
+                        ${freeAthletes.map(a => `<option value="${a.id}">${this.escapeHtml(a.name)} (${a.weight} кг, ${a.gender})</option>`).join('')}
+                    </select>
+                    <div style="display:flex; gap:6px; margin-top:6px;">
+                        <input type="text" id="mng-add-name" class="form-control" placeholder="Или новый спортсмен: Фамилия Имя" style="flex:1;">
+                        <input type="number" id="mng-add-weight" class="form-control" placeholder="Вес" style="width:90px;" title="Вес, кг">
+                        <input type="number" id="mng-add-birth" class="form-control" placeholder="Год" style="width:90px;" title="Год рождения">
+                        <button id="mng-add-new" class="btn-secondary" type="button">+ Добавить</button>
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:10px; margin-top:16px; justify-content:flex-end;">
                     <button id="mng-save" class="btn-primary">💾 Сохранить</button>
                     <button id="mng-cancel" class="btn-secondary">Отмена</button>
                 </div>
@@ -2905,8 +3154,77 @@ setupExport() {
         `;
         document.body.appendChild(modal);
 
+        // Убрать участника из этого турнира
+        modal.querySelector('#mng-members').addEventListener('click', async (e) => {
+            const rm = e.target.closest('.mng-remove');
+            if (!rm) return;
+            try {
+                await API.removeTournamentAthlete(tournamentId, parseInt(rm.dataset.id));
+                selected.delete(parseInt(rm.dataset.id));
+                rm.closest('.mng-row').remove();
+                const cEl = modal.querySelector('#mng-count');
+                if (cEl) cEl.textContent = selected.size;
+            } catch (err) {
+                toast('Ошибка: ' + err.message);
+            }
+        });
+
+        // Добавить выбранного свободного спортсмена
+        const addSel = modal.querySelector('#mng-add-select');
+        addSel.addEventListener('change', async () => {
+            const id = parseInt(addSel.value);
+            if (!id) return;
+            try {
+                await API.addTournamentAthlete(tournamentId, id);
+                const a = freeAthletes.find(x => x.id === id);
+                selected.add(id);
+                const addCont = modal.querySelector('#mng-members');
+                const empty = addCont.querySelector('div[style*="text-align:center"]');
+                if (empty) empty.remove();
+                addCont.insertAdjacentHTML('beforeend', memberRow(a));
+                addSel.value = '';
+                const cEl = modal.querySelector('#mng-count');
+                if (cEl) cEl.textContent = selected.size;
+                toast(`Добавлен: ${a.name}`);
+            } catch (err) {
+                toast('Ошибка: ' + err.message);
+            }
+        });
+
+        // Создать нового спортсмена и сразу привязать к этому турниру
+        const addNew = modal.querySelector('#mng-add-new');
+        addNew.addEventListener('click', async () => {
+            const name = (modal.querySelector('#mng-add-name').value || '').trim();
+            const weightRaw = modal.querySelector('#mng-add-weight').value;
+            const birthRaw = modal.querySelector('#mng-add-birth').value;
+            if (!name) { toast('Введите имя спортсмена', 'warning'); return; }
+            if (!weightRaw) { toast('Введите вес', 'warning'); return; }
+            if (!birthRaw) { toast('Введите год рождения', 'warning'); return; }
+            const gender = prompt('Пол спортсмена (мужской/женский):', 'мужской') || 'мужской';
+            try {
+                const a = await API.addAthlete({
+                    name, birth_year: parseInt(birthRaw), weight: parseFloat(weightRaw), gender,
+                    rank: '', region: '', coach: ''
+                });
+                await API.addTournamentAthlete(tournamentId, a.id);
+                selected.add(a.id);
+                const addCont = modal.querySelector('#mng-members');
+                const empty = addCont.querySelector('div[style*="text-align:center"]');
+                if (empty) empty.remove();
+                addCont.insertAdjacentHTML('beforeend', memberRow(a));
+                modal.querySelector('#mng-add-name').value = '';
+                modal.querySelector('#mng-add-weight').value = '';
+                modal.querySelector('#mng-add-birth').value = '';
+                const cEl = modal.querySelector('#mng-count');
+                if (cEl) cEl.textContent = selected.size;
+                toast(`Создан и добавлен: ${a.name}`);
+            } catch (err) {
+                toast('Ошибка: ' + err.message);
+            }
+        });
+
         modal.querySelector('#mng-save').addEventListener('click', async () => {
-            const ids = [...modal.querySelectorAll('input:checked')].map(c => parseInt(c.value));
+            const ids = [...selected];
             try {
                 await API.updateAthletes(tournamentId, ids);
                 modal.remove();
@@ -2918,6 +3236,14 @@ setupExport() {
         });
         modal.querySelector('#mng-cancel').addEventListener('click', () => modal.remove());
         modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    },
+
+    // Собирает объекты спортсменов для участников турнира (по id).
+    async _resolveMembers(tournamentId, selected) {
+        const ids = [...selected];
+        if (!ids.length) return [];
+        const all = await API.getAthletes();
+        return ids.map(id => all.find(a => a.id === id)).filter(Boolean);
     },
 
     // ==================== ЖЕРЕБЬЕВКА ====================

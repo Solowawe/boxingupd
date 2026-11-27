@@ -471,6 +471,23 @@ def get_athletes():
     return jsonify(athletes)
 
 
+@app.route('/api/athletes/free', methods=['GET'])
+def get_free_athletes():
+    """Спортсмены, не привязанные ни к одному турниру (свободные для добавления).
+    Каждый боец переиспользуется только в одном турнире — «жёсткое разделение»."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT a.* FROM athletes a "
+            "WHERE NOT EXISTS (SELECT 1 FROM tournament_athletes ta WHERE ta.athlete_id = a.id) "
+            "ORDER BY a.name"
+        ).fetchall()
+        athletes = rows_to_list(rows)
+    finally:
+        conn.close()
+    return jsonify(athletes)
+
+
 @app.route('/api/athletes/<int:athlete_id>', methods=['GET'])
 def get_athlete(athlete_id):
     """Получить одного спортсмена."""
@@ -2278,65 +2295,43 @@ def _pick_col(header, *keys):
     """Выбирает индекс столбца по ключевым словам в заголовке.
 
     Приоритет — столбцы, подсвеченные жёлтым (header[i]['y']); если их нет —
-    любой подходящий по тексту заголовка.
+    любой подходящий по тексту заголовка. Также сопоставляет «слипшиеся»
+    заголовки (например «Датарождения», «Весоваякатегория») — с нормализованным
+    ключом без пробелов.
     """
     n = len(header)
     def htext(i):
         return _norm_header(header[i]['t'])
+    # Прямые кандидаты по полным ключам
     cands = [i for i in range(n) if any(k in htext(i) for k in keys)]
-    if not cands:
-        return None
-    yellow = [i for i in cands if header[i].get('y')]
-    return (yellow or cands)[0]
+    if cands:
+        yellow = [i for i in cands if header[i].get('y')]
+        return (yellow or cands)[0]
+    # Fallback на «слипшиеся» заголовки: ключ без пробелов/тире ищем в тексте без пробелов
+    joined_free = []
+    for i in range(n):
+        free = htext(i).replace(' ', '').replace('-', '').replace('.', '')
+        joined_free.append(free)
+    for key in keys:
+        kfree = key.replace(' ', '').replace('-', '').replace('.', '')
+        if not kfree:
+            continue
+        hit = [i for i in range(n) if kfree in joined_free[i]]
+        if hit:
+            return hit[0]
+    return None
 
 
-@app.route('/api/import/docx', methods=['POST'])
-def import_docx():
-    """Импорт бойцов из таблицы Word-файла.
+def _parse_docx_athletes(upload_bytes, default_gender='мужской'):
+    """Разбирает Word-файл и возвращает список записей спортсменов:
+    [{name, weight, birth_year, rank, region, coach}].
 
-    Сопоставление по названию столбцов: ФИО, Весовая категория, Тренер.
-    Остальное (пол, год, разряд, регион) — необязательно / по умолчанию.
+    Сопоставление по заголовкам столбцов (приоритет — жёлтые). Возвращает
+    кортеж (rows, errors).
     """
-    upload = request.files.get('file')
-    if upload is None or not upload.filename:
-        return jsonify({'error': 'Файл не передан'}), 400
-
-    default_gender = (request.form.get('gender') or 'мужской').strip()
-    if default_gender not in ('мужской', 'женский'):
-        default_gender = 'мужской'
-
-    # Если установлен флаг replace — полностью очищаем текущий список спортсменов
-    # (в т.ч. «родных»), чтобы остался только импортируемый состав.
-    if request.form.get('replace', '0') == '1':
-        conn = get_db()
-        try:
-            conn.execute("DELETE FROM tournament_athletes")
-            conn.execute("DELETE FROM bracket_results")
-            conn.execute("DELETE FROM lottery")
-            conn.execute("DELETE FROM fights")
-            conn.execute("DELETE FROM athletes")
-            conn.commit()
-        finally:
-            conn.close()
-
-    try:
-        tables = parse_docx_tables(upload.read())
-    except Exception as e:
-        return jsonify({'error': f'Не удалось прочитать Word-файл: {e}'}), 400
-
-    # Имена уже присутствующих спортсменов (name.lower -> id) — чтобы не плодить дубли,
-    # но при этом привязать к турниру и уже существующих бойцов из файла.
-    try:
-        conn0 = get_db()
-        existing_names = {r[0].lower(): r[1] for r in conn0.execute("SELECT name, id FROM athletes").fetchall()}
-        conn0.close()
-    except Exception:
-        existing_names = {}
-
-    imported = []
+    tables = parse_docx_tables(upload_bytes)
+    rows = []
     errors = []
-    new_ids = []
-    skipped = 0  # уже были в базе, но привязаны к турниру
     for table in tables:
         if not table:
             continue
@@ -2374,32 +2369,113 @@ def import_docx():
                 continue
             weight = _extract_weight(cell(row, ci_weight)) if ci_weight is not None else None
             birth_year = _extract_year(cell(row, ci_birth)) if ci_birth is not None else 0
-            rank = cell(row, ci_rank).strip()
-            region = cell(row, ci_region).strip()
-            coach = cell(row, ci_coach).strip()
+            rows.append({
+                'name': name,
+                'weight': weight,
+                'birth_year': birth_year,
+                'rank': cell(row, ci_rank).strip(),
+                'region': cell(row, ci_region).strip(),
+                'coach': cell(row, ci_coach).strip()
+            })
+    return rows, errors
 
-            # Если спортсмен с таким именем уже есть — не плодим дубль,
-            # но привязываем его к турниру (по существующему id).
-            if name.lower() in existing_names:
-                new_ids.append(existing_names[name.lower()])
-                skipped += 1  # уже есть — привязываем существующего, не создавая дубль
-                continue
 
-            conn = get_db()
-            try:
-                cur = conn.execute(
-                    '''INSERT INTO athletes (name, birth_year, weight, gender, rank, region, coach)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                    (name, birth_year, weight if weight is not None else 0.0, default_gender, rank, region, coach)
-                )
-                conn.commit()
-                existing_names[name.lower()] = cur.lastrowid
-                new_ids.append(cur.lastrowid)
-                imported.append({'name': name, 'weight': weight})
-            except Exception as e:
-                errors.append(f'{name}: {e}')
-            finally:
-                conn.close()
+@app.route('/api/import/docx/preview', methods=['POST'])
+def import_docx_preview():
+    """Разобрать Word-файл и вернуть записи спортсменов БЕЗ записи в БД.
+    Используется для интерактивной сверки дублей при загрузке списка.
+    """
+    upload = request.files.get('file')
+    if upload is None or not upload.filename:
+        return jsonify({'error': 'Файл не передан'}), 400
+
+    try:
+        rows, errors = _parse_docx_athletes(upload.read())
+    except Exception as e:
+        return jsonify({'error': f'Не удалось прочитать Word-файл: {e}'}), 400
+
+    if not rows:
+        return jsonify({'error': 'Не найдено строк для импорта (проверьте, что в таблице есть столбцы ФИО/имя и заголовки)'}), 400
+
+    return jsonify({'rows': rows, 'errors': errors[:20]})
+
+
+@app.route('/api/import/docx', methods=['POST'])
+def import_docx():
+    """Импорт бойцов из таблицы Word-файла.
+
+    Сопоставление по названию столбцов: ФИО, Весовая категория, Тренер.
+    Остальное (пол, год, разряд, регион) — необязательно / по умолчанию.
+    """
+    upload = request.files.get('file')
+    if upload is None or not upload.filename:
+        return jsonify({'error': 'Файл не передан'}), 400
+
+    default_gender = (request.form.get('gender') or 'мужской').strip()
+    if default_gender not in ('мужской', 'женский'):
+        default_gender = 'мужской'
+
+    # Если установлен флаг replace — полностью очищаем текущий список спортсменов
+    # (в т.ч. «родных»), чтобы остался только импортируемый состав.
+    if request.form.get('replace', '0') == '1':
+        conn = get_db()
+        try:
+            conn.execute("DELETE FROM tournament_athletes")
+            conn.execute("DELETE FROM bracket_results")
+            conn.execute("DELETE FROM lottery")
+            conn.execute("DELETE FROM fights")
+            conn.execute("DELETE FROM athletes")
+            conn.commit()
+        finally:
+            conn.close()
+
+    try:
+        rows, errors = _parse_docx_athletes(upload.read())
+    except Exception as e:
+        return jsonify({'error': f'Не удалось прочитать Word-файл: {e}'}), 400
+
+    # Имена уже присутствующих спортсменов (name.lower -> id) — чтобы не плодить дубли,
+    # но при этом привязать к турниру и уже существующих бойцов из файла.
+    try:
+        conn0 = get_db()
+        existing_names = {r[0].lower(): r[1] for r in conn0.execute("SELECT name, id FROM athletes").fetchall()}
+        conn0.close()
+    except Exception:
+        existing_names = {}
+
+    imported = []
+    new_ids = []
+    skipped = 0  # уже были в базе, но привязаны к турниру
+    for rec in rows:
+        name = rec['name']
+        weight = rec['weight']
+        birth_year = rec['birth_year']
+        rank = rec['rank']
+        region = rec['region']
+        coach = rec['coach']
+
+        # Если спортсмен с таким именем уже есть — не плодим дубль,
+        # но привязываем его к турниру (по существующему id).
+        if name.lower() in existing_names:
+            new_ids.append(existing_names[name.lower()])
+            skipped += 1  # уже есть — привязываем существующего, не создавая дубль
+            continue
+
+        conn = get_db()
+        try:
+            cur = conn.execute(
+                '''INSERT INTO athletes (name, birth_year, weight, gender, rank, region, coach)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (name, birth_year, weight if weight is not None else 0.0, default_gender, rank, region, coach)
+            )
+            conn.commit()
+            existing_names[name.lower()] = cur.lastrowid
+            new_ids.append(cur.lastrowid)
+            imported.append({'name': name, 'weight': weight})
+        except Exception as e:
+            errors.append(f'{name}: {e}')
+        finally:
+            conn.close()
 
     if not imported and not errors and not new_ids:
         return jsonify({'error': 'Не найдено строк для импорта (проверьте, что в таблице есть столбцы ФИО/имя и заголовки)'}), 400
@@ -4753,10 +4829,9 @@ def report_pkdrk(tournament_id):
     if t is None:
         conn.close()
         return jsonify({'error': 'Соревнование не найдено'}), 404
-    lottery = rows_to_list(conn.execute(
-        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
+    # Источник участников — ВСЕУЧАСТНИКИ турнира (как во взвешивании), а не жеребьёвка.
     ath_ids = [r['athlete_id'] for r in conn.execute(
-        "SELECT DISTINCT athlete_id FROM lottery WHERE tournament_id=?", (tournament_id,)).fetchall()]
+        "SELECT athlete_id FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchall()]
     conn.close()
 
     athletes = []
@@ -4766,6 +4841,30 @@ def report_pkdrk(tournament_id):
         athletes = rows_to_list(connb.execute(f"SELECT * FROM athletes WHERE id IN ({_ph})", ath_ids).fetchall())
         connb.close()
     by_id = {a['id']: a for a in athletes}
+
+    # Синтезируем «слоты» как в жеребьёвке, но по всем участникам: каждому участнику —
+    # весовую категорию «пол вес кг» по его фактическому весу.
+    def _mk_wc(gender, weight):
+        try:
+            w = float(weight)
+        except (TypeError, ValueError):
+            w = 0.0
+        g = (gender or '').strip().lower()
+        gw = 'мужской' if g in ('мужской', 'муж', 'м', 'male') else ('женский' if g in ('женский', 'жен', 'ж', 'female', 'f') else '')
+        if w <= 0 or not gw:
+            return None
+        w_str = f"{int(w)}" if w == int(w) else f"{w:g}"
+        return f"{gw} {w_str} кг"
+
+    lottery = []
+    for a in athletes:
+        try:
+            _w = float(a.get('weight') or 0)
+        except (TypeError, ValueError):
+            _w = 0.0
+        wc = _mk_wc(a.get('gender'), _w)
+        if wc:
+            lottery.append({'athlete_id': a['id'], 'weight_class': wc, 'slot': 1})
 
     def _wc_gender(wc):
         wc = wc or ''
@@ -4795,12 +4894,19 @@ def report_pkdrk(tournament_id):
         if not raw:
             return None
         low = raw.lower()
-        for pre in ('калмыкия г.', 'калмыкия п.', 'калмыкия с.', 'калмыкия г',
-                    'калмыкия', 'республика калмыкия'):
+        # Нормализация «слипшихся» форм без пробела: «Калмыкияг.Элиста» -> «Элиста»,
+        # «Калмыкияс.Приютное», «РеспубликаКалмыкия» и т.п.
+        for pre in ('республика калмыкия', 'калмыкия г.', 'калмыкия п.', 'калмыкия с.',
+                    'калмыкия г', 'калмыкия', 'калмыкияг', 'калмыкия'):
             if low.startswith(pre):
                 low = low[len(pre):].strip()
+                # срезаем тип населённого пункта без точки ИЛИ слипшейся «г.»:
+                # только когда после буквы стоит точка («г.Элиста»), иначе район
+                # типа «Городовиковск»/«Садовое» лишится первой буквы.
+                low = _re.sub(r'^(г|п|с|х|в)\.', '', low)
                 break
         low = ' '.join(low.split())
+        low = _re.sub(r'^(г|п|с|х|в)\.', '', low)
         if low in _ELISTA_CLUBS:
             return 'Элиста'
         for canon in _REGION_KEYS:
@@ -4845,7 +4951,7 @@ def report_pkdrk(tournament_id):
                     for r in runs[1:]:
                         for rt in r.findall(_qn('w:t')):
                             rt.text = ''
-    def set_cell_text(tc, text):
+    def set_cell_text(tc, text, small=False):
         ps = tc.findall(_qn('w:p'))
         if not ps:
             return
@@ -4911,7 +5017,11 @@ def report_pkdrk(tournament_id):
         if n in _map:
             return _map[n]
         if n < 100:
-            return _map[(n//10)*10] + ' ' + _map.get(n % 10, '')
+            _d = (n // 10) * 10
+            _o = n % 10
+            if _d == 0:
+                return _map.get(_o, str(n))
+            return _map.get(_d, str(_d)) + ' ' + _map.get(_o, '')
         return str(n)
     def _rayons_words_rod(n):
         n = int(n)
@@ -5292,6 +5402,10 @@ def report_pkdrk(tournament_id):
                         _atl = _px('<w:tblLayout xmlns:w="%s"/>' % _WNS)
                         _atpr.append(_atl)
                     _atl.set(_qn('w:type'), 'fixed')
+                # взвешенные колонки весов в таблице по возрасту (муж/жен по сетке _col_w_a)
+                    _w_start_a = 3
+                    _w_end_a = 3 + len(male_weights)
+                    _fem_end_a = _w_end_a + 1 + len(female_weights)
                 for tr in age_el.findall(_qn('w:tr')):
                     _ci = 0
                     for tc in tr.findall(_qn('w:tc')):
@@ -5303,6 +5417,26 @@ def report_pkdrk(tournament_id):
                             _twc = _px('<w:tcW xmlns:w="%s"/>' % _WNS)
                             tc.find(_qn('w:tcPr')).append(_twc)
                         _twc.set(_qn('w:w'), str(_sum)); _twc.set(_qn('w:type'), 'dxa')
+                        _is_w = (_ci >= _w_start_a and _ci < _w_end_a) or (_ci > _w_end_a and _ci < _fem_end_a)
+                        if _is_w:
+                            _tcp3 = tc.find(_qn('w:tcPr'))
+                            if _tcp3 is not None and _tcp3.find(_qn('w:tcMar')) is None:
+                                _tcp3.append(_px('<w:tcMar xmlns:w="%s">'
+                                                 '<w:top w:w="0" w:type="dxa"/>'
+                                                 '<w:left w:w="0" w:type="dxa"/>'
+                                                 '<w:bottom w:w="0" w:type="dxa"/>'
+                                                 '<w:right w:w="0" w:type="dxa"/>'
+                                                 '</w:tcMar>' % _WNS))
+                            for _pp in tc.findall(_qn('w:p')):
+                                for _rr in _pp.findall(_qn('w:r')):
+                                    _rpr = _rr.find(_qn('w:rPr'))
+                                    if _rpr is None:
+                                        _rpr = _px('<w:rPr xmlns:w="%s"/>' % _WNS)
+                                        _rr.insert(0, _rpr)
+                                    if _rpr.find(_qn('w:sz')) is None:
+                                        _rpr.append(_px('<w:sz xmlns:w="%s" w:val="14"/>' % _WNS))
+                                    if _rpr.find(_qn('w:szCs')) is None:
+                                        _rpr.append(_px('<w:szCs xmlns:w="%s" w:val="14"/>' % _WNS))
                         _ci += span
 
     # ================= Таблица «по спортивной квалификации» =================
@@ -5478,6 +5612,9 @@ def report_pkdrk(tournament_id):
                         _stl = _px('<w:tblLayout xmlns:w="%s"/>' % _WNS)
                         _spr.append(_stl)
                     _stl.set(_qn('w:type'), 'fixed')
+                _w_start_s = 3
+                _w_end_s = 3 + len(male_weights)
+                _fem_end_s = _w_end_s + 1 + len(female_weights)
                 for tr in sk_el.findall(_qn('w:tr')):
                     _ci = 0
                     for tc in tr.findall(_qn('w:tc')):
@@ -5489,6 +5626,26 @@ def report_pkdrk(tournament_id):
                             _twc = _px('<w:tcW xmlns:w="%s"/>' % _WNS)
                             tc.find(_qn('w:tcPr')).append(_twc)
                         _twc.set(_qn('w:w'), str(_sum)); _twc.set(_qn('w:type'), 'dxa')
+                        _is_w = (_ci >= _w_start_s and _ci < _w_end_s) or (_ci > _w_end_s and _ci < _fem_end_s)
+                        if _is_w:
+                            _tcp3 = tc.find(_qn('w:tcPr'))
+                            if _tcp3 is not None and _tcp3.find(_qn('w:tcMar')) is None:
+                                _tcp3.append(_px('<w:tcMar xmlns:w="%s">'
+                                                 '<w:top w:w="0" w:type="dxa"/>'
+                                                 '<w:left w:w="0" w:type="dxa"/>'
+                                                 '<w:bottom w:w="0" w:type="dxa"/>'
+                                                 '<w:right w:w="0" w:type="dxa"/>'
+                                                 '</w:tcMar>' % _WNS))
+                            for _pp in tc.findall(_qn('w:p')):
+                                for _rr in _pp.findall(_qn('w:r')):
+                                    _rpr = _rr.find(_qn('w:rPr'))
+                                    if _rpr is None:
+                                        _rpr = _px('<w:rPr xmlns:w="%s"/>' % _WNS)
+                                        _rr.insert(0, _rpr)
+                                    if _rpr.find(_qn('w:sz')) is None:
+                                        _rpr.append(_px('<w:sz xmlns:w="%s" w:val="14"/>' % _WNS))
+                                    if _rpr.find(_qn('w:szCs')) is None:
+                                        _rpr.append(_px('<w:szCs xmlns:w="%s" w:val="14"/>' % _WNS))
                         _ci += span
 
     # ---- Пересобираем сетку колонок (tblGrid) под фактическое число колонок ----
@@ -5527,6 +5684,9 @@ def report_pkdrk(tournament_id):
                 _tpr.append(_tl)
             _tl.set(_qn('w:type'), 'fixed')
         # нормализуем ширины всех ячеек всех строк по сетке
+        weight_col_start = 3
+        weight_col_end = 3 + len(male_weights)                    # мужские веса
+        female_start = weight_col_end + 1                          # разделитель потом девичьи
         for tr in tbl_el.findall(_qn('w:tr')):
             _ci = 0
             for tc in tr.findall(_qn('w:tc')):
@@ -5540,6 +5700,30 @@ def report_pkdrk(tournament_id):
                     tc.find(_qn('w:tcPr')).append(_tccw)
                 _tccw.set(_qn('w:w'), str(_tcw_sum))
                 _tccw.set(_qn('w:type'), 'dxa')
+                # Уменьшаем шрифт в узких колонках весов (мужские и женские веса,
+                # кроме разделителя), чтобы числа помещались в одну строку.
+                _is_weight = (_ci >= weight_col_start and _ci < weight_col_end) or (_ci > female_start)
+                if _is_weight:
+                    # обнуляем боковые отступы ячейки, иначе при ширине колонки ~199 twips
+                    # текст не помещается (по умолчанию ~108+108 twips отступов) и скрывается
+                    _tcp3 = tc.find(_qn('w:tcPr'))
+                    if _tcp3 is not None and _tcp3.find(_qn('w:tcMar')) is None:
+                        _tcp3.append(_px('<w:tcMar xmlns:w="%s">'
+                                         '<w:top w:w="0" w:type="dxa"/>'
+                                         '<w:left w:w="0" w:type="dxa"/>'
+                                         '<w:bottom w:w="0" w:type="dxa"/>'
+                                         '<w:right w:w="0" w:type="dxa"/>'
+                                         '</w:tcMar>' % _WNS))
+                    for _pp in tc.findall(_qn('w:p')):
+                        for _rr in _pp.findall(_qn('w:r')):
+                            _rpr = _rr.find(_qn('w:rPr'))
+                            if _rpr is None:
+                                _rpr = _px('<w:rPr xmlns:w="%s"/>' % _WNS)
+                                _rr.insert(0, _rpr)
+                            if _rpr.find(_qn('w:sz')) is None:
+                                _rpr.append(_px('<w:sz xmlns:w="%s" w:val="14"/>' % _WNS))
+                            if _rpr.find(_qn('w:szCs')) is None:
+                                _rpr.append(_px('<w:szCs xmlns:w="%s" w:val="14"/>' % _WNS))
                 _ci += span
 
     buf = BytesIO()
@@ -6299,11 +6483,13 @@ def export_weighin_reglament():
     if t is None:
         conn.close()
         return jsonify({'error': 'Соревнование не найдено'}), 404
-    lottery = rows_to_list(conn.execute(
-        "SELECT * FROM lottery WHERE tournament_id=? ORDER BY weight_class, slot", (tournament_id,)).fetchall())
     results = rows_to_list(conn.execute(
         "SELECT * FROM bracket_results WHERE tournament_id=?", (tournament_id,)).fetchall())
-    ath_ids = [r['athlete_id'] for r in lottery]
+    # Источник участников — ВСЕУЧАСТНИКИ турнира (как во взвешивании), а не жеребьёвка.
+    # Так регламент показывает всех бойцов турнира (по весу и году рождения),
+    # независимо от того, проведена жеребьёвка или нет.
+    ath_ids = [r['athlete_id'] for r in conn.execute(
+        "SELECT athlete_id FROM tournament_athletes WHERE tournament_id=?", (tournament_id,)).fetchall()]
     conn.close()
 
     athletes = []
@@ -6313,6 +6499,41 @@ def export_weighin_reglament():
         athletes = rows_to_list(connb.execute(f"SELECT * FROM athletes WHERE id IN ({_ph})", ath_ids).fetchall())
         connb.close()
     by_id = {a['id']: a for a in athletes}
+
+    # Синтезируем структуру «слотов» как в жеребьёвке, но по всем участникам:
+    # группируем по фактическому весу (каждый вес = своя категория «пол вес кг»).
+    def _format_wc(gender, weight):
+        try:
+            w = float(weight)
+            w_str = f"{int(w)}" if w == int(w) else f"{w:g}"
+        except (TypeError, ValueError):
+            w_str = ''
+        g = (gender or '').strip().lower()
+        if g in ('мужской', 'муж', 'м', 'male'):
+            g = 'мужской'
+        elif g in ('женский', 'жен', 'ж', 'female', 'f'):
+            g = 'женский'
+        else:
+            g = ''
+        return f"{g} {w_str} кг".strip() if w_str else g
+
+    # lottery — список псевдо-слотов {athlete_id, slot, weight_class}
+    lottery = []
+    _by_wc = {}
+    for a in athletes:
+        try:
+            _w = float(a.get('weight') or 0)
+        except (TypeError, ValueError):
+            _w = 0
+        if _w <= 0:
+            continue
+        wc = _format_wc(a.get('gender'), _w)
+        if not wc:
+            continue
+        _by_wc.setdefault(wc, []).append(a)
+    for wc, grp in _by_wc.items():
+        for i, a in enumerate(sorted(grp, key=lambda x: (x['birth_year'] if x.get('birth_year') else 0) or 0, reverse=True), start=1):
+            lottery.append({'athlete_id': a['id'], 'slot': i, 'weight_class': wc})
 
     def _fmt_date(s):
         p = (s or '').split('-')
